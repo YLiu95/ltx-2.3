@@ -23,7 +23,7 @@ Copy/paste `kaggle_s2v/kaggle_cell_example.md` into a **single Kaggle code cell*
 
 2) In the **offline** notebook, attach:
 
-- your offline assets dataset (contains `ltx/`, `gemma/`, `repo/`)
+- your offline assets dataset (flat layout: weights + `repo_ltx-2.3.zip`)
 - the input dataset with your audio/image/prompt files
 
 Then run:
@@ -45,7 +45,17 @@ os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 # Point to the dataset root shown in Kaggle's "Data" panel.
 ASSETS_ROOT = "/kaggle/input/ltx23-offline-assets"  # <-- change
-REPO_DIR = f"{ASSETS_ROOT}/repo/ltx-2.3"
+
+# The offline assets dataset includes this repo as a single zip file:
+#   {ASSETS_ROOT}/repo_ltx-2.3.zip
+# Extract it to /kaggle/temp (allowed) and run from there.
+import zipfile
+
+REPO_DIR = "/kaggle/temp/ltx-2.3"
+REPO_ZIP = f"{ASSETS_ROOT}/repo_ltx-2.3.zip"
+if not os.path.exists(REPO_DIR):
+    with zipfile.ZipFile(REPO_ZIP, "r") as zf:
+        zf.extractall("/kaggle/temp")
 
 AUDIO_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrain_Chinese.wav"
 IMAGE_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/female secretary 512x763.png"

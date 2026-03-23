@@ -4,13 +4,19 @@ This creates a Kaggle Dataset that contains:
 
 - LTX-2.3 distilled checkpoint + spatial upscaler
 - Gemma 3 weights required by LTX’s text encoder
-- a copy of this repo (so the offline notebook doesn’t need `git clone` / `pip install -e`)
+- a zip of this repo (so the offline notebook doesn’t need `git clone` / internet)
 
 Then, in the **offline** notebook, you attach the dataset as an input and run `kaggle_s2v/run_s2v.py` with `--assets_mode offline`.
 
 > Important: Gemma is gated and may have redistribution restrictions. Uploading model weights to a **public** Kaggle dataset may violate terms. Consider using a **private** dataset.
 
 ## Single Kaggle cell
+
+Why the dataset is **flat** (no subdirectories):
+
+- `kaggle datasets create --dir-mode zip` will **zip each folder** before uploading it.
+- Zipping huge `.safetensors` files is very slow and uses a lot of extra temporary disk space.
+- A flat layout lets us upload with `--dir-mode skip` (no zipping/tarring on Kaggle).
 
 Paste this into **one** Kaggle notebook cell **with internet enabled**:
 
@@ -60,14 +66,13 @@ DATASET_ID = f"{KAGGLE_USERNAME}/{DATASET_SLUG}"
 
 # This folder's contents will become /kaggle/input/<dataset>/...
 # Use /kaggle/temp so we don't stage huge model files under /kaggle/working.
+#
+# IMPORTANT: keep this folder *flat* (no subdirectories) so we can upload with
+# --dir-mode skip and avoid zipping huge folders.
 DATASET_DIR = Path("/kaggle/temp/ltx23_offline_assets")
 if DATASET_DIR.exists():
     shutil.rmtree(DATASET_DIR)
 DATASET_DIR.mkdir(parents=True, exist_ok=True)
-
-(DATASET_DIR / "ltx").mkdir()
-(DATASET_DIR / "gemma").mkdir()
-(DATASET_DIR / "repo").mkdir()
 
 # -----------------------
 # 3) Download model files into the dataset folder
@@ -82,14 +87,14 @@ hf_hub_download(
     repo_id=LTX_REPO_ID,
     filename="ltx-2.3-22b-distilled.safetensors",
     token=HF_TOKEN,
-    local_dir=str(DATASET_DIR / "ltx"),
+    local_dir=str(DATASET_DIR),
     local_dir_use_symlinks=False,
 )
 hf_hub_download(
     repo_id=LTX_REPO_ID,
     filename="ltx-2.3-spatial-upscaler-x2-1.0.safetensors",
     token=HF_TOKEN,
-    local_dir=str(DATASET_DIR / "ltx"),
+    local_dir=str(DATASET_DIR),
     local_dir_use_symlinks=False,
 )
 
@@ -97,7 +102,7 @@ print("Downloading Gemma assets (tokenizer + processor + all model*.safetensors 
 snapshot_download(
     repo_id=GEMMA_REPO_ID,
     token=HF_TOKEN,
-    local_dir=str(DATASET_DIR / "gemma"),
+    local_dir=str(DATASET_DIR),
     local_dir_use_symlinks=False,
     allow_patterns=[
         "tokenizer.model",
@@ -115,10 +120,18 @@ snapshot_download(
 # 4) Bundle repo code (no .git folder)
 # -----------------------
 REPO_URL = "https://github.com/YLiu95/ltx-2.3.git"
-REPO_DST = DATASET_DIR / "repo" / "ltx-2.3"
+REPO_TMP_PARENT = Path("/kaggle/temp/ltx23_repo_clone")
+REPO_DST = REPO_TMP_PARENT / "ltx-2.3"
 print("Cloning repo code...")
+shutil.rmtree(REPO_TMP_PARENT, ignore_errors=True)
 subprocess.run(["git", "clone", "--depth", "1", REPO_URL, str(REPO_DST)], check=True)
 shutil.rmtree(REPO_DST / ".git", ignore_errors=True)
+
+# Zip the repo into a single file so the dataset stays flat (no directories).
+print("Zipping repo code into repo_ltx-2.3.zip ...")
+repo_zip_base = DATASET_DIR / "repo_ltx-2.3"
+shutil.make_archive(str(repo_zip_base), "zip", root_dir=str(REPO_TMP_PARENT), base_dir="ltx-2.3")
+shutil.rmtree(REPO_TMP_PARENT, ignore_errors=True)
 
 # -----------------------
 # 5) Create dataset metadata
@@ -140,7 +153,7 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
     print("+", " ".join(cmd))
     return subprocess.run(cmd, check=False, text=True, capture_output=True)
 
-create = run(["kaggle", "datasets", "create", "-p", str(DATASET_DIR), "--dir-mode", "zip"])
+create = run(["kaggle", "datasets", "create", "-p", str(DATASET_DIR), "--dir-mode", "skip"])
 if create.returncode == 0:
     print("Created:", DATASET_ID)
 else:
@@ -148,7 +161,9 @@ else:
     print("Create failed (likely already exists). Output:")
     print(create.stdout[-2000:])
     print(create.stderr[-2000:])
-    version = run(["kaggle", "datasets", "version", "-p", str(DATASET_DIR), "-m", "Update offline assets", "--dir-mode", "zip"])
+    version = run(
+        ["kaggle", "datasets", "version", "-p", str(DATASET_DIR), "-m", "Update offline assets", "--dir-mode", "skip"]
+    )
     if version.returncode != 0:
         print(version.stdout[-2000:])
         print(version.stderr[-2000:])

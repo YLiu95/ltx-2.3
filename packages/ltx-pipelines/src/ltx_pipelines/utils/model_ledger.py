@@ -170,7 +170,10 @@ class ModelLedger:
             if self.gemma_root_path is not None:
                 module_ops = module_ops_from_gemma_root(self.gemma_root_path)
                 model_folder = find_matching_file(self.gemma_root_path, "model*.safetensors").parent
-                weight_paths = [str(p) for p in model_folder.rglob("*.safetensors")]
+                # Only pick Gemma weight shards; this avoids accidentally ingesting
+                # unrelated safetensors that may share the same parent folder
+                # (e.g. when users colocate multiple models under one directory).
+                weight_paths = [str(p) for p in sorted(model_folder.rglob("model*.safetensors"))]
 
                 self.text_encoder_builder = Builder(
                     model_path=tuple(weight_paths),

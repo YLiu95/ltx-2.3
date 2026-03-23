@@ -38,6 +38,17 @@ def resolve_distilled_a2v_assets_from_dir(assets_root: str) -> DistilledA2VAsset
 
     Expected layout under ``assets_root``:
 
+    **Preferred (fast Kaggle upload): flat dataset (no subdirectories)**
+
+    - ltx-2.3-22b-distilled.safetensors
+    - ltx-2.3-spatial-upscaler-x2-1.0.safetensors
+    - tokenizer.model
+    - preprocessor_config.json
+    - model*.safetensors (+ index json if sharded)
+    - repo_ltx-2.3.zip (optional; repo code bundled as an archive)
+
+    **Also supported: directory layout**
+
     - ltx/
       - ltx-2.3-22b-distilled.safetensors
       - ltx-2.3-spatial-upscaler-x2-1.0.safetensors
@@ -50,6 +61,13 @@ def resolve_distilled_a2v_assets_from_dir(assets_root: str) -> DistilledA2VAsset
     root = Path(assets_root)
     ltx_dir = root / "ltx"
     gemma_dir = root / "gemma"
+
+    # Allow a flat layout (no subdirectories) to avoid Kaggle CLI zipping/tarring
+    # huge folders on upload.
+    if not ltx_dir.exists():
+        ltx_dir = root
+    if not gemma_dir.exists():
+        gemma_dir = root
 
     distilled_checkpoint_path = ltx_dir / LTX_DISTILLED_CHECKPOINT
     spatial_upsampler_path = ltx_dir / LTX_SPATIAL_UPSCALER_X2

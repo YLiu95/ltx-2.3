@@ -27,13 +27,23 @@ os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 # --- 1) Point to the *dataset root* ------------------------------------------
-# This should contain:
-#   <ASSETS_ROOT>/ltx/ltx-2.3-22b-distilled.safetensors
-#   <ASSETS_ROOT>/ltx/ltx-2.3-spatial-upscaler-x2-1.0.safetensors
-#   <ASSETS_ROOT>/gemma/tokenizer.model (+ config + model*.safetensors shards)
-#   <ASSETS_ROOT>/repo/ltx-2.3/ (this repo code)
+# This dataset is built by `kaggle_s2v/build_offline_assets_dataset.md`.
+#
+# Expected *flat* layout under ASSETS_ROOT (no directories):
+#   - ltx-2.3-22b-distilled.safetensors
+#   - ltx-2.3-spatial-upscaler-x2-1.0.safetensors
+#   - tokenizer.model + preprocessor_config.json + model*.safetensors (Gemma)
+#   - repo_ltx-2.3.zip  (repo code bundle)
 ASSETS_ROOT = "/kaggle/input/ltx23-offline-assets"  # <-- change to your dataset folder name
-REPO_DIR = f"{ASSETS_ROOT}/repo/ltx-2.3"
+
+# Extract the repo zip into /kaggle/temp so we can run it without internet.
+import zipfile
+
+REPO_DIR = "/kaggle/temp/ltx-2.3"
+REPO_ZIP = f"{ASSETS_ROOT}/repo_ltx-2.3.zip"
+if not os.path.exists(REPO_DIR):
+    with zipfile.ZipFile(REPO_ZIP, "r") as zf:
+        zf.extractall("/kaggle/temp")
 
 # --- 2) Inputs ---------------------------------------------------------------
 AUDIO_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrain_Chinese.wav"

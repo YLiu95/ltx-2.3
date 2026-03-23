@@ -26,6 +26,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from tqdm.auto import tqdm
 
 # -----------------------
 # 0) Secrets
@@ -37,6 +38,18 @@ user_secrets = UserSecretsClient()
 HF_TOKEN = user_secrets.get_secret("HF_TOKEN")
 KAGGLE_USERNAME = user_secrets.get_secret("KAGGLE_USERNAME")
 KAGGLE_KEY = user_secrets.get_secret("KAGGLE_KEY")
+
+# -----------------------
+# 0.5) Keep caches out of /kaggle/working + enable progress bars
+# -----------------------
+os.environ["HF_HOME"] = "/kaggle/temp/hf"
+os.environ["HUGGINGFACE_HUB_CACHE"] = "/kaggle/temp/hf/hub"
+os.environ["TRANSFORMERS_CACHE"] = "/kaggle/temp/hf/transformers"
+os.environ["XDG_CACHE_HOME"] = "/kaggle/temp/xdg-cache"
+os.environ["TORCH_HOME"] = "/kaggle/temp/torch"
+os.environ["PIP_CACHE_DIR"] = "/kaggle/temp/pip-cache"
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "0")  # show HF download tqdm
 
 # -----------------------
 # 1) Kaggle API auth (store creds under /kaggle/temp)
@@ -53,8 +66,7 @@ Path(kaggle_cfg_dir / "kaggle.json").write_text(
 os.chmod(kaggle_cfg_dir / "kaggle.json", 0o600)
 os.environ["KAGGLE_CONFIG_DIR"] = str(kaggle_cfg_dir)
 
-# Install CLI if needed (installs into env; keep pip cache out of /kaggle/working)
-os.environ["PIP_CACHE_DIR"] = "/kaggle/temp/pip-cache"
+# Install CLI if needed (installs into env; cache goes to /kaggle/temp)
 subprocess.run(["python", "-m", "pip", "-q", "install", "kaggle", "huggingface_hub"], check=True)
 
 # -----------------------
@@ -64,47 +76,80 @@ subprocess.run(["python", "-m", "pip", "-q", "install", "kaggle", "huggingface_h
 DATASET_SLUG = "ltx23-offline-assets"
 DATASET_ID = f"{KAGGLE_USERNAME}/{DATASET_SLUG}"
 
+# Set this True if you *really* want a public dataset (not recommended for gated models like Gemma).
+MAKE_PUBLIC = False
+
 # This folder's contents will become /kaggle/input/<dataset>/...
 # Use /kaggle/temp so we don't stage huge model files under /kaggle/working.
 #
 # IMPORTANT: keep this folder *flat* (no subdirectories) so we can upload with
 # --dir-mode skip and avoid zipping huge folders.
 DATASET_DIR = Path("/kaggle/temp/ltx23_offline_assets")
-if DATASET_DIR.exists():
+# If you already downloaded the files in a previous run, keep them and reuse.
+# Set CLEAN_STAGING=True only when you want to force a full rebuild.
+CLEAN_STAGING = False
+if CLEAN_STAGING and DATASET_DIR.exists():
     shutil.rmtree(DATASET_DIR)
 DATASET_DIR.mkdir(parents=True, exist_ok=True)
 
 # -----------------------
-# 3) Download model files into the dataset folder
+# 3) Prepare / reuse files (no re-download if already present)
 # -----------------------
 from huggingface_hub import hf_hub_download, snapshot_download
 
 LTX_REPO_ID = "Lightricks/LTX-2.3"
 GEMMA_REPO_ID = "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
-print("Downloading LTX weights...")
-hf_hub_download(
-    repo_id=LTX_REPO_ID,
-    filename="ltx-2.3-22b-distilled.safetensors",
-    token=HF_TOKEN,
-    local_dir=str(DATASET_DIR),
-    local_dir_use_symlinks=False,
-)
-hf_hub_download(
-    repo_id=LTX_REPO_ID,
-    filename="ltx-2.3-spatial-upscaler-x2-1.0.safetensors",
-    token=HF_TOKEN,
-    local_dir=str(DATASET_DIR),
-    local_dir_use_symlinks=False,
-)
+def _move_file(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        src.rename(dst)
+    except OSError:
+        shutil.move(str(src), str(dst))
 
-print("Downloading Gemma assets (tokenizer + processor + all model*.safetensors shards)...")
-snapshot_download(
-    repo_id=GEMMA_REPO_ID,
-    token=HF_TOKEN,
-    local_dir=str(DATASET_DIR),
-    local_dir_use_symlinks=False,
-    allow_patterns=[
+
+def _flatten_if_needed() -> None:
+    # Supports older layouts from previous versions of this guide:
+    #   DATASET_DIR/ltx/*, DATASET_DIR/gemma/*, DATASET_DIR/repo/ltx-2.3/*
+    for sub in ("ltx", "gemma"):
+        d = DATASET_DIR / sub
+        if not d.exists():
+            continue
+        files = [p for p in d.rglob("*") if p.is_file()]
+        for p in tqdm(files, desc=f"Flatten {sub}", unit="file", dynamic_ncols=True):
+            dst = DATASET_DIR / p.name
+            if dst.exists():
+                continue
+            _move_file(p, dst)
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _safe_symlink_or_copy(src: Path, dst: Path) -> None:
+    if dst.exists():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.symlink(src, dst)
+    except FileExistsError:
+        return
+    except OSError:
+        shutil.copy2(src, dst)
+
+
+_flatten_if_needed()
+
+
+def _ensure_gemma_files() -> None:
+    required = [
+        DATASET_DIR / "tokenizer.model",
+        DATASET_DIR / "preprocessor_config.json",
+        DATASET_DIR / "config.json",
+    ]
+    has_weights = any(DATASET_DIR.glob("model*.safetensors"))
+    if all(p.exists() for p in required) and has_weights:
+        return
+
+    allow_patterns = [
         "tokenizer.model",
         "tokenizer_config.json",
         "special_tokens_map.json",
@@ -113,8 +158,86 @@ snapshot_download(
         "generation_config.json",
         "model*.safetensors",
         "model.safetensors.index.json",
-    ],
-)
+    ]
+
+    # Prefer local cache if present; otherwise download once and cache it.
+    try:
+        snap_dir = snapshot_download(
+            repo_id=GEMMA_REPO_ID,
+            token=HF_TOKEN,
+            cache_dir=os.environ["HUGGINGFACE_HUB_CACHE"],
+            allow_patterns=allow_patterns,
+            local_files_only=True,
+        )
+    except Exception:
+        snap_dir = snapshot_download(
+            repo_id=GEMMA_REPO_ID,
+            token=HF_TOKEN,
+            cache_dir=os.environ["HUGGINGFACE_HUB_CACHE"],
+            allow_patterns=allow_patterns,
+        )
+
+    snap = Path(snap_dir)
+    wanted: list[Path] = []
+    for name in (
+        "tokenizer.model",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "preprocessor_config.json",
+        "config.json",
+        "generation_config.json",
+        "model.safetensors.index.json",
+    ):
+        p = snap / name
+        if p.exists():
+            wanted.append(p)
+    wanted.extend(sorted(snap.glob("model*.safetensors")))
+
+    if not wanted:
+        raise RuntimeError(f"Gemma snapshot seems empty at: {snap_dir}")
+
+    total = sum(p.stat().st_size for p in wanted)
+    with tqdm(total=total, unit="B", unit_scale=True, unit_divisor=1024, desc="Stage Gemma", dynamic_ncols=True) as pbar:
+        for p in wanted:
+            dst = DATASET_DIR / p.name
+            if not dst.exists():
+                _safe_symlink_or_copy(p, dst)
+            pbar.update(p.stat().st_size)
+            pbar.set_postfix(file=p.name, refresh=False)
+
+
+print("Ensuring LTX weights (reuse cache if available)...")
+ltx_needed: list[tuple[Path, Path]] = []
+for fname in ("ltx-2.3-22b-distilled.safetensors", "ltx-2.3-spatial-upscaler-x2-1.0.safetensors"):
+    dst = DATASET_DIR / fname
+    if dst.exists():
+        continue
+    try:
+        cached = hf_hub_download(
+            repo_id=LTX_REPO_ID,
+            filename=fname,
+            token=HF_TOKEN,
+            cache_dir=os.environ["HUGGINGFACE_HUB_CACHE"],
+            local_files_only=True,
+        )
+    except Exception:
+        cached = hf_hub_download(
+            repo_id=LTX_REPO_ID,
+            filename=fname,
+            token=HF_TOKEN,
+            cache_dir=os.environ["HUGGINGFACE_HUB_CACHE"],
+        )
+    ltx_needed.append((Path(cached), dst))
+
+total = sum(src.stat().st_size for src, _ in ltx_needed)
+with tqdm(total=total, unit="B", unit_scale=True, unit_divisor=1024, desc="Stage LTX", dynamic_ncols=True) as pbar:
+    for src, dst in ltx_needed:
+        _safe_symlink_or_copy(src, dst)
+        pbar.update(src.stat().st_size)
+        pbar.set_postfix(file=dst.name, refresh=False)
+
+print("Ensuring Gemma assets (reuse cache if available)...")
+_ensure_gemma_files()
 
 # -----------------------
 # 4) Bundle repo code (no .git folder)
@@ -122,16 +245,25 @@ snapshot_download(
 REPO_URL = "https://github.com/YLiu95/ltx-2.3.git"
 REPO_TMP_PARENT = Path("/kaggle/temp/ltx23_repo_clone")
 REPO_DST = REPO_TMP_PARENT / "ltx-2.3"
-print("Cloning repo code...")
-shutil.rmtree(REPO_TMP_PARENT, ignore_errors=True)
-subprocess.run(["git", "clone", "--depth", "1", REPO_URL, str(REPO_DST)], check=True)
-shutil.rmtree(REPO_DST / ".git", ignore_errors=True)
+REPO_ZIP = DATASET_DIR / "repo_ltx-2.3.zip"
+if not REPO_ZIP.exists():
+    old_repo_dir = DATASET_DIR / "repo" / "ltx-2.3"
+    if old_repo_dir.exists():
+        print("Reusing previously-downloaded repo folder and zipping it...")
+        repo_zip_base = DATASET_DIR / "repo_ltx-2.3"
+        shutil.make_archive(str(repo_zip_base), "zip", root_dir=str(DATASET_DIR / "repo"), base_dir="ltx-2.3")
+        shutil.rmtree(DATASET_DIR / "repo", ignore_errors=True)
+    else:
+        print("Cloning repo code...")
+        shutil.rmtree(REPO_TMP_PARENT, ignore_errors=True)
+        subprocess.run(["git", "clone", "--depth", "1", REPO_URL, str(REPO_DST)], check=True)
+        shutil.rmtree(REPO_DST / ".git", ignore_errors=True)
 
-# Zip the repo into a single file so the dataset stays flat (no directories).
-print("Zipping repo code into repo_ltx-2.3.zip ...")
-repo_zip_base = DATASET_DIR / "repo_ltx-2.3"
-shutil.make_archive(str(repo_zip_base), "zip", root_dir=str(REPO_TMP_PARENT), base_dir="ltx-2.3")
-shutil.rmtree(REPO_TMP_PARENT, ignore_errors=True)
+        # Zip the repo into a single file so the dataset stays flat (no directories).
+        print("Zipping repo code into repo_ltx-2.3.zip ...")
+        repo_zip_base = DATASET_DIR / "repo_ltx-2.3"
+        shutil.make_archive(str(repo_zip_base), "zip", root_dir=str(REPO_TMP_PARENT), base_dir="ltx-2.3")
+        shutil.rmtree(REPO_TMP_PARENT, ignore_errors=True)
 
 # -----------------------
 # 5) Create dataset metadata
@@ -143,30 +275,43 @@ metadata = {
 }
 (DATASET_DIR / "dataset-metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
-print("Staged files:")
-subprocess.run(["bash", "-lc", f"ls -la '{DATASET_DIR}' && du -sh '{DATASET_DIR}'"], check=True)
+files = sorted([p for p in DATASET_DIR.iterdir() if p.is_file()])
+total_bytes = sum(p.stat().st_size for p in files)
+print(f"Staged {len(files)} files, total {total_bytes/1024**3:.1f} GiB in: {DATASET_DIR}")
+for p in files[:10]:
+    print(" -", p.name, f"({p.stat().st_size/1024**3:.2f} GiB)")
+if len(files) > 10:
+    print(f" - ... ({len(files)-10} more files)")
 
 # -----------------------
 # 6) Upload (create or version)
 # -----------------------
-def run(cmd: list[str]) -> subprocess.CompletedProcess:
+def run_live(cmd: list[str]) -> int:
     print("+", " ".join(cmd))
-    return subprocess.run(cmd, check=False, text=True, capture_output=True)
+    return subprocess.run(cmd, check=False).returncode
 
-create = run(["kaggle", "datasets", "create", "-p", str(DATASET_DIR), "--dir-mode", "skip"])
-if create.returncode == 0:
+create_cmd = ["kaggle", "datasets", "create", "-p", str(DATASET_DIR), "--dir-mode", "skip"]
+if MAKE_PUBLIC:
+    create_cmd.insert(3, "-u")
+
+rc = run_live(create_cmd)
+if rc == 0:
     print("Created:", DATASET_ID)
 else:
-    # If it already exists, create a new version instead.
-    print("Create failed (likely already exists). Output:")
-    print(create.stdout[-2000:])
-    print(create.stderr[-2000:])
-    version = run(
-        ["kaggle", "datasets", "version", "-p", str(DATASET_DIR), "-m", "Update offline assets", "--dir-mode", "skip"]
-    )
-    if version.returncode != 0:
-        print(version.stdout[-2000:])
-        print(version.stderr[-2000:])
+    print("Create failed (likely already exists). Trying version upload...")
+    version_cmd = [
+        "kaggle",
+        "datasets",
+        "version",
+        "-p",
+        str(DATASET_DIR),
+        "-m",
+        "Update offline assets",
+        "--dir-mode",
+        "skip",
+    ]
+    rc2 = run_live(version_cmd)
+    if rc2 != 0:
         raise RuntimeError("Failed to create/update dataset.")
     print("Updated:", DATASET_ID)
 

@@ -139,8 +139,10 @@ class QuantizationAction(argparse.Action):
                 raise argparse.ArgumentError(self, msg)
             policy = QuantizationPolicy.fp8_cast()
         elif policy_name == "fp8-scaled-mm":
-            amax_path = resolve_path(values[1]) if len(values) > 1 else None
-            policy = QuantizationPolicy.fp8_scaled_mm(amax_path)
+            if len(values) > 1:
+                msg = f"{option_string} fp8-scaled-mm does not accept additional arguments"
+                raise argparse.ArgumentError(self, msg)
+            policy = QuantizationPolicy.fp8_scaled_mm()
 
         setattr(namespace, self.dest, policy)
 
@@ -267,13 +269,13 @@ def basic_arg_parser(
         dest="quantization",
         action=QuantizationAction,
         nargs="+",
-        metavar=("POLICY", "AMAX_PATH"),
+        metavar=("POLICY",),
         default=None,
         help=(
             f"Quantization policy: {', '.join(QUANTIZATION_POLICIES)}. "
             "fp8-cast uses FP8 casting with upcasting during inference. "
-            "fp8-scaled-mm uses FP8 scaled matrix multiplication (optionally provide amax calibration file path). "
-            "Example: --quantization fp8-cast or --quantization fp8-scaled-mm /path/to/amax.json"
+            "fp8-scaled-mm uses FP8 scaled matrix multiplication via TensorRT-LLM operators. "
+            "Example: --quantization fp8-cast or --quantization fp8-scaled-mm"
         ),
     )
     return parser

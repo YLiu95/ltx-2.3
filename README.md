@@ -1,4 +1,125 @@
-# LTX-2
+# LTX-2.3 (Kaggle S2V)
+
+This is a Kaggle-focused fork of `Lightricks/LTX-2` that adds:
+
+- `kaggle_s2v/run_s2v.py`: a Kaggle runner for **speech/audio-conditioned image-to-video** (S2V/A2V).
+- `packages/ltx-pipelines/src/ltx_pipelines/distilled_a2v.py`: `DistilledA2VPipeline` (uses `ltx-2.3-22b-distilled.safetensors`).
+- Rich tqdm progress bars during denoising (speed/ETA + sigma + VRAM telemetry).
+
+Key Kaggle constraints this repo follows:
+
+- **No CPU/disk offloading** during inference (models are built on GPU; VRAM is managed via load/run/unload + `cleanup_memory()`).
+- **No model downloads to `/kaggle/working`**: all HF downloads/caches go to `/kaggle/temp`, and only output videos/configs are written to `/kaggle/working`.
+
+## Kaggle Quickstart (Speech-to-Video)
+
+Copy/paste `kaggle_s2v/kaggle_cell_example.md` into a **single Kaggle code cell**, or use this minimal version:
+
+```python
+import os
+from kaggle_secrets import UserSecretsClient
+
+# Keep caches out of /kaggle/working
+os.environ["HF_HOME"] = "/kaggle/temp/hf"
+os.environ["HUGGINGFACE_HUB_CACHE"] = "/kaggle/temp/hf/hub"
+os.environ["TRANSFORMERS_CACHE"] = "/kaggle/temp/hf/transformers"
+os.environ["XDG_CACHE_HOME"] = "/kaggle/temp/xdg-cache"
+os.environ["TORCH_HOME"] = "/kaggle/temp/torch"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+# Hugging Face token (Kaggle Secret)
+user_secrets = UserSecretsClient()
+os.environ["HF_TOKEN"] = user_secrets.get_secret("HF_TOKEN")
+
+# Clone code to /kaggle/temp (NOT /kaggle/working)
+REPO_DIR = "/kaggle/temp/ltx-2.3"
+if not os.path.exists(REPO_DIR):
+    !git clone --depth 1 https://github.com/YLiu95/ltx-2.3 {REPO_DIR}
+!pip -q install -e {REPO_DIR}
+
+# Inputs
+AUDIO_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrain_Chinese.wav"
+IMAGE_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/female secretary 512x763.png"
+AUDIO_TEXT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrian_Chinese_text.txt"
+PROMPT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/I2V prompt.txt"
+
+!python {REPO_DIR}/kaggle_s2v/run_s2v.py \
+  --pipeline distilled-a2v \
+  --audio_path "{AUDIO_PATH}" \
+  --image_path "{IMAGE_PATH}" \
+  --prompt_file "{PROMPT_FILE}" \
+  --audio_text_file "{AUDIO_TEXT_FILE}" \
+  --quantization fp8-cast \
+  --cleanup aggressive \
+  --vae_tiling default \
+  --progress --progress_vram --progress_vram_every 1
+```
+
+### Output layout (Kaggle)
+
+- Outputs: `/kaggle/working/s2v/outputs/<run_name>/video.mp4`
+- Run config (for reproducibility): `/kaggle/working/s2v/outputs/<run_name>/run_config.json`
+- HF caches/models: `/kaggle/temp/hf/...`
+- Intermediate padded image: `/kaggle/temp/s2v/padded/...`
+
+## Runner settings (explained)
+
+All settings are passed to `kaggle_s2v/run_s2v.py`.
+
+### Core inputs
+
+- `--audio_path`: Audio file to condition generation (wav/mp3/video-with-audio).
+- `--image_path`: Image used for conditioning (first frame).
+- `--prompt` / `--prompt_file`: Main prompt (required).
+- `--audio_text_file`: Optional transcript. The runner appends it to the prompt to help semantic alignment.
+
+### Resolution & frames
+
+- `--width`, `--height`: Output resolution. **Must be multiples of 64** (two-stage requirement).
+  - If omitted, the runner reads the input image size and **pads to the next multiple of 64** (e.g. 512x763 → 512x768).
+- `--fps`: Output fps (default 24).
+- `--num_frames`: If omitted, the runner computes `round(audio_duration * fps)` and snaps to **8k+1** (model constraint).
+- `--audio_max_duration`: If omitted, defaults to `num_frames / fps` so the muxed audio doesn’t extend past the video.
+
+### VRAM / speed knobs (no offloading)
+
+- `--quantization`:
+  - `fp8-cast` (default): lower VRAM by storing transformer weights in FP8 and upcasting during matmul.
+  - `fp8-scaled-mm`: uses TensorRT-LLM FP8 scaled matmul ops (only if available in the environment).
+  - `none`: full-precision weights.
+- `--cleanup`:
+  - `aggressive` (default): unload/reload big modules between stages (lowest peak VRAM, slowest).
+  - `balanced`: fewer reloads (middle ground).
+  - `none`: keep everything loaded (fastest, highest peak VRAM).
+- `--vae_tiling`:
+  - `default` (default): decode video in tiles (safer for long/high-res videos).
+  - `none`: decode in one go (faster if you have plenty of VRAM).
+
+### Progress / monitoring (tqdm)
+
+During denoising you get tqdm bars showing:
+
+- speed + ETA (tqdm default)
+- postfix fields: `sigma`, `vram`, `resv`, `peak`
+
+Controls:
+
+- `--progress` / `--no-progress`: enable/disable progress bars
+- `--progress_vram` / `--no-progress_vram`: enable/disable VRAM postfix
+- `--progress_vram_every N`: update VRAM postfix every N denoising steps (1 = most detailed)
+
+### Advanced pipeline (optional): `a2vid-two-stage`
+
+Set `--pipeline a2vid-two-stage` to use the upstream `A2VidPipelineTwoStage` (dev checkpoint + distilled LoRA).
+This exposes more “guidance” knobs, but downloads more weights.
+
+Common knobs:
+
+- `--num_inference_steps`: diffusion steps for Stage 1 (higher = slower, often better adherence)
+- `--negative_prompt` / `--negative_prompt_file`: what to avoid
+- `--video_cfg_scale`: classifier-free guidance strength
+- `--video_stg_scale`, `--video_stg_blocks`: spatio-temporal guidance parameters
+- `--a2v_guidance_scale`: audio-to-video guidance strength (can help lip-sync)
 
 [![Website](https://img.shields.io/badge/Website-LTX-181717?logo=google-chrome)](https://ltx.io)
 [![Model](https://img.shields.io/badge/HuggingFace-Model-orange?logo=huggingface)](https://huggingface.co/Lightricks/LTX-2.3)

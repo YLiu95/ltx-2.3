@@ -94,6 +94,13 @@ class A2VidPipelineTwoStage:
         audio_max_duration: float | None = None,
         tiling_config: TilingConfig | None = None,
         enhance_prompt: bool = False,
+        *,
+        progress: bool = True,
+        progress_leave: bool = True,
+        progress_position: int = 0,
+        progress_vram: bool = True,
+        progress_vram_every: int = 1,
+        progress_bar_format: str | None = None,
     ) -> tuple[Iterator[torch.Tensor], Audio]:
         assert_resolution(height=height, width=width, is_two_stage=True)
 
@@ -162,6 +169,13 @@ class A2VidPipelineTwoStage:
                     a_context=a_context_p,
                     transformer=transformer,  # noqa: F821
                 ),
+                progress=progress,
+                progress_desc="Stage 1 denoise (A2V guided)",
+                progress_leave=progress_leave,
+                progress_position=progress_position,
+                progress_vram=progress_vram,
+                progress_vram_every=progress_vram_every,
+                progress_bar_format=progress_bar_format,
             )
 
         video_state = denoise_video_only(
@@ -218,6 +232,13 @@ class A2VidPipelineTwoStage:
                     audio_context=a_context_p,
                     transformer=transformer,  # noqa: F821
                 ),
+                progress=progress,
+                progress_desc="Stage 2 denoise (A2V refine)",
+                progress_leave=progress_leave,
+                progress_position=progress_position,
+                progress_vram=progress_vram,
+                progress_vram_every=progress_vram_every,
+                progress_bar_format=progress_bar_format,
             )
 
         video_state = denoise_video_only(

@@ -4,7 +4,7 @@ from functools import partial
 from typing import Callable
 
 import torch
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from ltx_core.components.diffusion_steps import Res2sDiffusionStep
 from ltx_core.components.protocols import DiffusionStepProtocol
@@ -16,12 +16,34 @@ from ltx_pipelines.utils.types import DenoisingFunc, LatentState
 logger = logging.getLogger(__name__)
 
 
+def _cuda_vram_stats_gb(device: torch.device) -> dict[str, str]:
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return {}
+    idx = device.index if device.index is not None else torch.cuda.current_device()
+    allocated = torch.cuda.memory_allocated(idx) / (1024**3)
+    reserved = torch.cuda.memory_reserved(idx) / (1024**3)
+    max_allocated = torch.cuda.max_memory_allocated(idx) / (1024**3)
+    return {
+        "vram": f"{allocated:.1f}G",
+        "resv": f"{reserved:.1f}G",
+        "peak": f"{max_allocated:.1f}G",
+    }
+
+
 def euler_denoising_loop(
     sigmas: torch.Tensor,
     video_state: LatentState,
     audio_state: LatentState,
     stepper: DiffusionStepProtocol,
     denoise_fn: DenoisingFunc,
+    *,
+    progress: bool = True,
+    progress_desc: str | None = None,
+    progress_leave: bool = True,
+    progress_position: int = 0,
+    progress_vram: bool = True,
+    progress_vram_every: int = 1,
+    progress_bar_format: str | None = None,
 ) -> tuple[LatentState, LatentState]:
     """
     Perform the joint audio-video denoising loop over a diffusion schedule.
@@ -54,7 +76,21 @@ def euler_denoising_loop(
         A pair ``(video_state, audio_state)`` containing the final video and
         audio latent states after completing the denoising loop.
     """
-    for step_idx, _ in enumerate(tqdm(sigmas[:-1])):
+    iterable = sigmas[:-1]
+    pbar = (
+        tqdm(
+            iterable,
+            desc=progress_desc,
+            leave=progress_leave,
+            position=progress_position,
+            dynamic_ncols=True,
+            bar_format=progress_bar_format,
+        )
+        if progress
+        else iterable
+    )
+
+    for step_idx, _ in enumerate(pbar):
         denoised_video, denoised_audio = denoise_fn(video_state, audio_state, sigmas, step_idx)
 
         denoised_video = post_process_latent(denoised_video, video_state.denoise_mask, video_state.clean_latent)
@@ -62,6 +98,14 @@ def euler_denoising_loop(
 
         video_state = replace(video_state, latent=stepper.step(video_state.latent, denoised_video, sigmas, step_idx))
         audio_state = replace(audio_state, latent=stepper.step(audio_state.latent, denoised_audio, sigmas, step_idx))
+
+        if progress and progress_vram and isinstance(pbar, tqdm) and progress_vram_every > 0:
+            if step_idx % progress_vram_every == 0 or step_idx == len(sigmas) - 2:
+                postfix = {
+                    "sigma": f"{float(sigmas[step_idx].item()):.4f}",
+                    **_cuda_vram_stats_gb(video_state.latent.device),
+                }
+                pbar.set_postfix(postfix, refresh=False)
 
     return (video_state, audio_state)
 
@@ -73,6 +117,14 @@ def gradient_estimating_euler_denoising_loop(
     stepper: DiffusionStepProtocol,
     denoise_fn: DenoisingFunc,
     ge_gamma: float = 2.0,
+    *,
+    progress: bool = True,
+    progress_desc: str | None = None,
+    progress_leave: bool = True,
+    progress_position: int = 0,
+    progress_vram: bool = True,
+    progress_vram_every: int = 1,
+    progress_bar_format: str | None = None,
 ) -> tuple[LatentState, LatentState]:
     """
     Perform the joint audio-video denoising loop using gradient-estimation sampling.
@@ -104,7 +156,21 @@ def gradient_estimating_euler_denoising_loop(
             denoised_sample = to_denoised(noisy_sample, total_velocity, sigma)
         return current_velocity, denoised_sample
 
-    for step_idx, _ in enumerate(tqdm(sigmas[:-1])):
+    iterable = sigmas[:-1]
+    pbar = (
+        tqdm(
+            iterable,
+            desc=progress_desc,
+            leave=progress_leave,
+            position=progress_position,
+            dynamic_ncols=True,
+            bar_format=progress_bar_format,
+        )
+        if progress
+        else iterable
+    )
+
+    for step_idx, _ in enumerate(pbar):
         denoised_video, denoised_audio = denoise_fn(video_state, audio_state, sigmas, step_idx)
 
         denoised_video = post_process_latent(denoised_video, video_state.denoise_mask, video_state.clean_latent)
@@ -122,6 +188,14 @@ def gradient_estimating_euler_denoising_loop(
 
         video_state = replace(video_state, latent=stepper.step(video_state.latent, denoised_video, sigmas, step_idx))
         audio_state = replace(audio_state, latent=stepper.step(audio_state.latent, denoised_audio, sigmas, step_idx))
+
+        if progress and progress_vram and isinstance(pbar, tqdm) and progress_vram_every > 0:
+            if step_idx % progress_vram_every == 0 or step_idx == len(sigmas) - 2:
+                postfix = {
+                    "sigma": f"{float(sigmas[step_idx].item()):.4f}",
+                    **_cuda_vram_stats_gb(video_state.latent.device),
+                }
+                pbar.set_postfix(postfix, refresh=False)
 
     return (video_state, audio_state)
 
@@ -181,6 +255,14 @@ def res2s_audio_video_denoising_loop(  # noqa: PLR0913,PLR0915
     new_noise_fn: Callable[[torch.Tensor, torch.Generator], torch.Tensor] = _get_new_noise,
     model_dtype: torch.dtype = torch.bfloat16,
     legacy_mode: bool = True,
+    *,
+    progress: bool = True,
+    progress_desc: str | None = None,
+    progress_leave: bool = True,
+    progress_position: int = 0,
+    progress_vram: bool = True,
+    progress_vram_every: int = 1,
+    progress_bar_format: str | None = None,
 ) -> tuple[LatentState, LatentState]:
     """
     Joint audio-video denoising loop using the res_2s second-order sampler.
@@ -247,7 +329,21 @@ def res2s_audio_video_denoising_loop(  # noqa: PLR0913,PLR0915
 
     # Progress bar shows only full two-stage steps; final (sigma_next==0) step is done silently
 
-    for step_idx in tqdm(range(n_full_steps)):
+    iterable = range(n_full_steps)
+    pbar = (
+        tqdm(
+            iterable,
+            desc=progress_desc,
+            leave=progress_leave,
+            position=progress_position,
+            dynamic_ncols=True,
+            bar_format=progress_bar_format,
+        )
+        if progress
+        else iterable
+    )
+
+    for step_idx in pbar:
         sigma = sigmas[step_idx].double()
         sigma_next = sigmas[step_idx + 1].double()
 
@@ -258,6 +354,10 @@ def res2s_audio_video_denoising_loop(  # noqa: PLR0913,PLR0915
         # ====================================================================
         # STAGE 1: Evaluate at current point
         # ====================================================================
+        if progress and progress_vram and isinstance(pbar, tqdm) and progress_vram_every > 0:
+            if step_idx % progress_vram_every == 0 or step_idx == n_full_steps - 1:
+                postfix = {"sigma": f"{float(sigma.item()):.4f}", **_cuda_vram_stats_gb(video_state.latent.device)}
+                pbar.set_postfix(postfix, refresh=False)
         denoised_video_1, denoised_audio_1 = denoise_fn(video_state, audio_state, sigmas, step_idx)
         denoised_video_1 = post_process_latent(denoised_video_1, video_state.denoise_mask, video_state.clean_latent)
         denoised_audio_1 = post_process_latent(denoised_audio_1, audio_state.denoise_mask, audio_state.clean_latent)

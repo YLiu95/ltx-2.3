@@ -7,7 +7,10 @@ Choose **one** of the following single-cell options:
 
 ## A) Offline (NO internet) notebook
 
-Attach your offline assets dataset (built from `kaggle_s2v/build_offline_assets_dataset.md`) as a Kaggle input.
+Attach:
+
+- `ltx23-offline-assets` (weights)
+- `ltx23-offline-code` (this repo code; lets you update code without re-uploading ~67GB)
 
 ```python
 import os
@@ -29,54 +32,68 @@ os.environ["TRANSFORMERS_OFFLINE"] = "1"
 # Note: some Kaggle images don't include PyAV (`import av`). The runner falls
 # back to `ffmpeg` for audio/video I/O when PyAV is missing.
 
-# --- 1) Point to the *dataset root* ------------------------------------------
-# This dataset is built by `kaggle_s2v/build_offline_assets_dataset.md`.
-#
-# Expected *flat* layout under ASSETS_ROOT (no directories):
-#   - ltx-2.3-22b-distilled.safetensors
-#   - ltx-2.3-spatial-upscaler-x2-1.0.safetensors
-#   - tokenizer.model + preprocessor_config.json + model*.safetensors (Gemma)
-#   - repo_ltx-2.3.zip  (repo code bundle)
-ASSETS_ROOT = "/kaggle/input/ltx23-offline-assets"  # <-- change to your dataset folder name
+# --- 1) Locate datasets ------------------------------------------------------
+# Kaggle sometimes mounts datasets as:
+# - /kaggle/input/<slug>
+# - /kaggle/input/datasets/<owner>/<slug>
+import glob
 
-# Extract the repo zip into /kaggle/temp so we can run it without internet.
-import zipfile
+def _find_dataset_root(slug: str) -> str:
+    candidates = [
+        f"/kaggle/input/{slug}",
+        f"/kaggle/input/datasets/{slug}",
+        f"/kaggle/input/datasets/yliu95/{slug}",  # common case for this project
+    ]
+    for c in candidates:
+        if os.path.isdir(c):
+            return c
+    matches = [p for p in glob.glob(f"/kaggle/input/**/{slug}", recursive=True) if os.path.isdir(p)]
+    if matches:
+        return sorted(matches, key=len)[0]
+    raise FileNotFoundError(f"Could not find dataset folder for slug: {slug}")
 
-# Prefer running directly from a repo folder if the dataset contains one.
-# Depending on how you built the dataset, the repo may be stored as:
-# - {ASSETS_ROOT}/repo/ltx-2.3/               (older)
-# - {ASSETS_ROOT}/repo_ltx-2.3/ltx-2.3/       (some builds)
-# - {ASSETS_ROOT}/repo_ltx-2.3/               (folder containing repo root)
-# - {ASSETS_ROOT}/repo_ltx-2.3.zip            (recommended)
+# Weights dataset (built by `kaggle_s2v/build_offline_assets_dataset.md`)
+ASSETS_ROOT = _find_dataset_root("ltx23-offline-assets")
+
+# Code dataset (built by `kaggle_s2v/build_offline_code_dataset.md`)
+CODE_ROOT = _find_dataset_root("ltx23-offline-code")
+
+# --- 2) Locate repo code -----------------------------------------------------
+# Prefer code dataset (so you can update code without touching the ~67GB weights dataset).
+# Supported layouts in CODE_ROOT:
+# - {CODE_ROOT}/repo_ltx-2.3/ltx-2.3/...
+# - {CODE_ROOT}/repo_ltx-2.3/...
+# - {CODE_ROOT}/repo/ltx-2.3/...
 repo_candidates = [
-    f"{ASSETS_ROOT}/repo/ltx-2.3",
+    f"{CODE_ROOT}/repo_ltx-2.3/ltx-2.3",
+    f"{CODE_ROOT}/repo_ltx-2.3",
+    f"{CODE_ROOT}/repo/ltx-2.3",
+    # Fallback: some people bundled code inside the weights dataset too.
     f"{ASSETS_ROOT}/repo_ltx-2.3/ltx-2.3",
     f"{ASSETS_ROOT}/repo_ltx-2.3",
+    f"{ASSETS_ROOT}/repo/ltx-2.3",
 ]
 REPO_DIR = next((d for d in repo_candidates if os.path.exists(os.path.join(d, "kaggle_s2v", "run_s2v.py"))), None)
-
 if REPO_DIR is None:
-    REPO_DIR = "/kaggle/temp/ltx-2.3"
-    REPO_ZIP = f"{ASSETS_ROOT}/repo_ltx-2.3.zip"
-    if not os.path.exists(REPO_DIR):
-        if not os.path.exists(REPO_ZIP):
-            raise FileNotFoundError(
-                "Could not find repo code in the assets dataset. Expected one of:\n"
-                f"- {repo_candidates[0]}\n"
-                f"- {repo_candidates[1]}\n"
-                f"- {repo_candidates[2]}\n"
-                f"- {REPO_ZIP}\n"
-            )
-        with zipfile.ZipFile(REPO_ZIP, "r") as zf:
-            zf.extractall("/kaggle/temp")
+    raise FileNotFoundError(
+        "Could not find repo code. Looked for `kaggle_s2v/run_s2v.py` under:\n" + "\n".join(repo_candidates)
+    )
 
-# --- 2) Inputs ---------------------------------------------------------------
+# Sanity check: if you see `ModuleNotFoundError: No module named 'av'`, you're running an old snapshot.
+with open(os.path.join(REPO_DIR, "kaggle_s2v", "run_s2v.py"), "r", encoding="utf-8") as f:
+    if "ffprobe" not in f.read():
+        raise RuntimeError(
+            "This repo snapshot is too old (it still hard-requires PyAV). "
+            "Update the `ltx23-offline-code` dataset to the latest version and re-attach it."
+        )
+
+# --- 3) Inputs ---------------------------------------------------------------
 AUDIO_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrain_Chinese.wav"
 IMAGE_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/female secretary 512x763.png"
 AUDIO_TEXT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrian_Chinese_text.txt"
 PROMPT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/I2V prompt.txt"
 
-# --- 3) Run (recommended pipeline) ------------------------------------------
+# --- 4) Run (recommended pipeline) ------------------------------------------
 # Notes on the non-beginner settings below:
 #
 # --quantization:

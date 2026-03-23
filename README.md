@@ -21,15 +21,21 @@ Copy/paste `kaggle_s2v/kaggle_cell_example.md` into a **single Kaggle code cell*
 
 - `kaggle_s2v/build_offline_assets_dataset.md`
 
-2) In the **offline** notebook, attach:
+2) In the same (internet-enabled) notebook, build a tiny **code** dataset (so you can update code without re-uploading ~67GB of weights):
 
-- your offline assets dataset (flat layout: weights + `repo_ltx-2.3.zip`)
+- `kaggle_s2v/build_offline_code_dataset.md`
+
+3) In the **offline** notebook, attach:
+
+- your offline assets dataset (weights)
+- your offline code dataset (repo code only)
 - the input dataset with your audio/image/prompt files
 
 Then run:
 
 ```python
 import os
+import glob
 
 # Keep caches out of /kaggle/working (only outputs should go there)
 os.environ["HF_HOME"] = "/kaggle/temp/hf"
@@ -46,26 +52,47 @@ os.environ["TRANSFORMERS_OFFLINE"] = "1"
 # Note: some Kaggle images don't ship with PyAV (`import av`). This repo falls
 # back to `ffmpeg` for audio/video I/O when PyAV is missing.
 
-# Point to the dataset root shown in Kaggle's "Data" panel.
-ASSETS_ROOT = "/kaggle/input/ltx23-offline-assets"  # <-- change
+def _find_dataset_root(slug: str) -> str:
+    candidates = [
+        f"/kaggle/input/{slug}",
+        f"/kaggle/input/datasets/{slug}",
+        f"/kaggle/input/datasets/yliu95/{slug}",  # common case for this project
+    ]
+    for c in candidates:
+        if os.path.isdir(c):
+            return c
+    matches = [p for p in glob.glob(f"/kaggle/input/**/{slug}", recursive=True) if os.path.isdir(p)]
+    if matches:
+        return sorted(matches, key=len)[0]
+    raise FileNotFoundError(f"Could not find dataset folder for slug: {slug}")
 
-# The offline assets dataset includes this repo as a single zip file:
-#   {ASSETS_ROOT}/repo_ltx-2.3.zip
-# Extract it to /kaggle/temp (allowed) and run from there.
-import zipfile
+# Weights dataset (built by `kaggle_s2v/build_offline_assets_dataset.md`)
+ASSETS_ROOT = _find_dataset_root("ltx23-offline-assets")
 
+# Code dataset (built by `kaggle_s2v/build_offline_code_dataset.md`)
+CODE_ROOT = _find_dataset_root("ltx23-offline-code")
+
+# Prefer code dataset (so code updates don't touch the weights dataset).
 repo_candidates = [
-    f"{ASSETS_ROOT}/repo/ltx-2.3",         # older
-    f"{ASSETS_ROOT}/repo_ltx-2.3/ltx-2.3", # some builds
-    f"{ASSETS_ROOT}/repo_ltx-2.3",         # folder containing repo root
+    f"{CODE_ROOT}/repo_ltx-2.3/ltx-2.3",
+    f"{CODE_ROOT}/repo_ltx-2.3",
+    f"{CODE_ROOT}/repo/ltx-2.3",
+    # Fallback: some builds bundled code inside the weights dataset too.
+    f"{ASSETS_ROOT}/repo_ltx-2.3/ltx-2.3",
+    f"{ASSETS_ROOT}/repo_ltx-2.3",
+    f"{ASSETS_ROOT}/repo/ltx-2.3",
 ]
 REPO_DIR = next((d for d in repo_candidates if os.path.exists(os.path.join(d, "kaggle_s2v", "run_s2v.py"))), None)
 if REPO_DIR is None:
-    REPO_DIR = "/kaggle/temp/ltx-2.3"
-    REPO_ZIP = f"{ASSETS_ROOT}/repo_ltx-2.3.zip"
-    if not os.path.exists(REPO_DIR):
-        with zipfile.ZipFile(REPO_ZIP, "r") as zf:
-            zf.extractall("/kaggle/temp")
+    raise FileNotFoundError("Could not find `kaggle_s2v/run_s2v.py` under:\n" + "\n".join(repo_candidates))
+
+# Sanity check: if you see `ModuleNotFoundError: No module named 'av'`, you're running an old snapshot.
+with open(os.path.join(REPO_DIR, "kaggle_s2v", "run_s2v.py"), "r", encoding="utf-8") as f:
+    if "ffprobe" not in f.read():
+        raise RuntimeError(
+            "This repo snapshot is too old (it still hard-requires PyAV). "
+            "Update the `ltx23-offline-code` dataset to the latest version and re-attach it."
+        )
 
 AUDIO_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrain_Chinese.wav"
 IMAGE_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/female secretary 512x763.png"
@@ -148,7 +175,8 @@ All settings are passed to `kaggle_s2v/run_s2v.py`.
 - `--assets_mode`:
   - `download` (default): download from Hugging Face into `/kaggle/temp` (requires internet + `HF_TOKEN`).
   - `offline`: load from a Kaggle dataset mounted under `/kaggle/input` (no internet).
-- `--assets_root`: required when `--assets_mode offline`. Points at the dataset root that contains `ltx/` and `gemma/`.
+- `--assets_root`: required when `--assets_mode offline`. Points at the dataset root containing the required LTX + Gemma files.
+  - Supported layouts: **flat** (all files at root) or **subdirs** (`ltx/`, `gemma/`).
 
 ### Core inputs
 

@@ -4,7 +4,7 @@ This creates a Kaggle Dataset that contains:
 
 - LTX-2.3 distilled checkpoint + spatial upscaler
 - Gemma 3 weights required by LTX’s text encoder
-- a zip of this repo (so the offline notebook doesn’t need `git clone` / internet)
+- (optional) a zip of this repo (so the offline notebook doesn’t need `git clone` / internet)
 
 Then, in the **offline** notebook, you attach the dataset as an input and run `kaggle_s2v/run_s2v.py` with `--assets_mode offline`.
 
@@ -78,6 +78,10 @@ DATASET_ID = f"{KAGGLE_USERNAME}/{DATASET_SLUG}"
 
 # Set this True if you *really* want a public dataset (not recommended for gated models like Gemma).
 MAKE_PUBLIC = False
+
+# Recommended: keep repo code in a separate tiny dataset (`ltx23-offline-code`)
+# so you can update code without re-uploading ~67GB of weights.
+INCLUDE_REPO_CODE = False
 
 # This folder's contents will become /kaggle/input/<dataset>/...
 # Use /kaggle/temp so we don't stage huge model files under /kaggle/working.
@@ -240,30 +244,31 @@ print("Ensuring Gemma assets (reuse cache if available)...")
 _ensure_gemma_files()
 
 # -----------------------
-# 4) Bundle repo code (no .git folder)
+# 4) (Optional) Bundle repo code (no .git folder)
 # -----------------------
-REPO_URL = "https://github.com/YLiu95/ltx-2.3.git"
-REPO_TMP_PARENT = Path("/kaggle/temp/ltx23_repo_clone")
-REPO_DST = REPO_TMP_PARENT / "ltx-2.3"
-REPO_ZIP = DATASET_DIR / "repo_ltx-2.3.zip"
-if not REPO_ZIP.exists():
-    old_repo_dir = DATASET_DIR / "repo" / "ltx-2.3"
-    if old_repo_dir.exists():
-        print("Reusing previously-downloaded repo folder and zipping it...")
-        repo_zip_base = DATASET_DIR / "repo_ltx-2.3"
-        shutil.make_archive(str(repo_zip_base), "zip", root_dir=str(DATASET_DIR / "repo"), base_dir="ltx-2.3")
-        shutil.rmtree(DATASET_DIR / "repo", ignore_errors=True)
-    else:
-        print("Cloning repo code...")
-        shutil.rmtree(REPO_TMP_PARENT, ignore_errors=True)
-        subprocess.run(["git", "clone", "--depth", "1", REPO_URL, str(REPO_DST)], check=True)
-        shutil.rmtree(REPO_DST / ".git", ignore_errors=True)
+if INCLUDE_REPO_CODE:
+    REPO_URL = "https://github.com/YLiu95/ltx-2.3.git"
+    REPO_TMP_PARENT = Path("/kaggle/temp/ltx23_repo_clone")
+    REPO_DST = REPO_TMP_PARENT / "ltx-2.3"
+    REPO_ZIP = DATASET_DIR / "repo_ltx-2.3.zip"
+    if not REPO_ZIP.exists():
+        old_repo_dir = DATASET_DIR / "repo" / "ltx-2.3"
+        if old_repo_dir.exists():
+            print("Reusing previously-downloaded repo folder and zipping it...")
+            repo_zip_base = DATASET_DIR / "repo_ltx-2.3"
+            shutil.make_archive(str(repo_zip_base), "zip", root_dir=str(DATASET_DIR / "repo"), base_dir="ltx-2.3")
+            shutil.rmtree(DATASET_DIR / "repo", ignore_errors=True)
+        else:
+            print("Cloning repo code...")
+            shutil.rmtree(REPO_TMP_PARENT, ignore_errors=True)
+            subprocess.run(["git", "clone", "--depth", "1", REPO_URL, str(REPO_DST)], check=True)
+            shutil.rmtree(REPO_DST / ".git", ignore_errors=True)
 
-        # Zip the repo into a single file so the dataset stays flat (no directories).
-        print("Zipping repo code into repo_ltx-2.3.zip ...")
-        repo_zip_base = DATASET_DIR / "repo_ltx-2.3"
-        shutil.make_archive(str(repo_zip_base), "zip", root_dir=str(REPO_TMP_PARENT), base_dir="ltx-2.3")
-        shutil.rmtree(REPO_TMP_PARENT, ignore_errors=True)
+            # Zip the repo into a single file so the dataset stays flat (no directories).
+            print("Zipping repo code into repo_ltx-2.3.zip ...")
+            repo_zip_base = DATASET_DIR / "repo_ltx-2.3"
+            shutil.make_archive(str(repo_zip_base), "zip", root_dir=str(REPO_TMP_PARENT), base_dir="ltx-2.3")
+            shutil.rmtree(REPO_TMP_PARENT, ignore_errors=True)
 
 # -----------------------
 # 5) Create dataset metadata
@@ -315,6 +320,6 @@ else:
         raise RuntimeError("Failed to create/update dataset.")
     print("Updated:", DATASET_ID)
 
-print("\nNext (offline notebook): attach this dataset as input, then set:")
+print("\nNext (offline notebook): attach this dataset as input, plus `ltx23-offline-code`, then set:")
 print(f"ASSETS_ROOT = '/kaggle/input/{DATASET_SLUG}'  # or the dataset folder name shown in the 'Data' panel")
 ```

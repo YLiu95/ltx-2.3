@@ -15,6 +15,8 @@ Key Kaggle constraints this repo follows:
 
 Copy/paste `kaggle_s2v/kaggle_cell_example.md` into a **single Kaggle code cell**, or use this minimal version:
 
+> Note: the Gemma repo used by LTX is gated; make sure your Hugging Face account has accepted the model terms.
+
 ```python
 import os
 from kaggle_secrets import UserSecretsClient

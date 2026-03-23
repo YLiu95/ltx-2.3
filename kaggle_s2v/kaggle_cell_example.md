@@ -1,41 +1,47 @@
 # Kaggle: single-cell S2V (image + audio → video)
 
-Paste the following into **one Kaggle notebook cell**.
+Choose **one** of the following single-cell options:
+
+- **A) Offline notebook (NO internet)**: run from a Kaggle Dataset that already contains weights + repo code.
+- **B) Internet-enabled notebook**: download weights from Hugging Face into `/kaggle/temp`.
+
+## A) Offline (NO internet) notebook
+
+Attach your offline assets dataset (built from `kaggle_s2v/build_offline_assets_dataset.md`) as a Kaggle input.
 
 ```python
-# --- 0) Keep *all* caches out of /kaggle/working -----------------------------
 import os
 
+# --- 0) Keep caches out of /kaggle/working -----------------------------------
 os.environ["HF_HOME"] = "/kaggle/temp/hf"
 os.environ["HUGGINGFACE_HUB_CACHE"] = "/kaggle/temp/hf/hub"
 os.environ["TRANSFORMERS_CACHE"] = "/kaggle/temp/hf/transformers"
 os.environ["XDG_CACHE_HOME"] = "/kaggle/temp/xdg-cache"
 os.environ["TORCH_HOME"] = "/kaggle/temp/torch"
 
-# Reduces CUDA memory fragmentation on large models (recommended for LTX).
+# Recommended for large models: reduces CUDA memory fragmentation.
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-# --- 1) Secrets (HF token) ---------------------------------------------------
-from kaggle_secrets import UserSecretsClient
+# Hard-offline (prevents any network calls).
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
-user_secrets = UserSecretsClient()
-os.environ["HF_TOKEN"] = user_secrets.get_secret("HF_TOKEN")
+# --- 1) Point to the *dataset root* ------------------------------------------
+# This should contain:
+#   <ASSETS_ROOT>/ltx/ltx-2.3-22b-distilled.safetensors
+#   <ASSETS_ROOT>/ltx/ltx-2.3-spatial-upscaler-x2-1.0.safetensors
+#   <ASSETS_ROOT>/gemma/tokenizer.model (+ config + model*.safetensors shards)
+#   <ASSETS_ROOT>/repo/ltx-2.3/ (this repo code)
+ASSETS_ROOT = "/kaggle/input/ltx23-offline-assets"  # <-- change to your dataset folder name
+REPO_DIR = f"{ASSETS_ROOT}/repo/ltx-2.3"
 
-# --- 2) Get code (clone to /kaggle/temp, NOT /kaggle/working) -----------------
-REPO_DIR = "/kaggle/temp/ltx-2.3"
-if not os.path.exists(REPO_DIR):
-    !git clone --depth 1 https://github.com/YLiu95/ltx-2.3 {REPO_DIR}
-
-# --- 3) Install the repo as a package (installs into the Python env, not /kaggle/working)
-!pip -q install -e {REPO_DIR}
-
-# --- 4) Inputs ---------------------------------------------------------------
+# --- 2) Inputs ---------------------------------------------------------------
 AUDIO_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrain_Chinese.wav"
 IMAGE_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/female secretary 512x763.png"
 AUDIO_TEXT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrian_Chinese_text.txt"
 PROMPT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/I2V prompt.txt"
 
-# --- 5) Run (recommended pipeline) ------------------------------------------
+# --- 3) Run (recommended pipeline) ------------------------------------------
 # Notes on the non-beginner settings below:
 #
 # --quantization:
@@ -52,9 +58,10 @@ PROMPT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/I2V prompt.t
 #   - none: decode in one go (faster but uses more VRAM).
 #
 # --progress_vram_every:
-#   How often (in denoising steps) to query VRAM for tqdm postfix. 1 = most detailed, slightly more overhead.
-!
+#   How often (in denoising steps) to query VRAM for tqdm postfix. 1 = most detailed, slight overhead.
 !python {REPO_DIR}/kaggle_s2v/run_s2v.py \
+  --assets_mode offline \
+  --assets_root "{ASSETS_ROOT}" \
   --pipeline distilled-a2v \
   --audio_path "{AUDIO_PATH}" \
   --image_path "{IMAGE_PATH}" \
@@ -66,6 +73,51 @@ PROMPT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/I2V prompt.t
   --progress --progress_vram --progress_vram_every 1
 
 # Output video(s) will be under:
-#   /kaggle/working/s2v/outputs/<timestamp>/video.mp4
+#   /kaggle/working/s2v/outputs/<run_name>/video.mp4
 ```
 
+## B) Internet-enabled notebook (downloads to `/kaggle/temp`)
+
+> Note: the Gemma repo used by LTX is gated; make sure your Hugging Face account has accepted the model terms.
+
+```python
+import os
+
+# --- 0) Keep caches out of /kaggle/working -----------------------------------
+os.environ["HF_HOME"] = "/kaggle/temp/hf"
+os.environ["HUGGINGFACE_HUB_CACHE"] = "/kaggle/temp/hf/hub"
+os.environ["TRANSFORMERS_CACHE"] = "/kaggle/temp/hf/transformers"
+os.environ["XDG_CACHE_HOME"] = "/kaggle/temp/xdg-cache"
+os.environ["TORCH_HOME"] = "/kaggle/temp/torch"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+# --- 1) Secrets (HF token) ---------------------------------------------------
+from kaggle_secrets import UserSecretsClient
+
+user_secrets = UserSecretsClient()
+os.environ["HF_TOKEN"] = user_secrets.get_secret("HF_TOKEN")
+
+# --- 2) Get code (clone to /kaggle/temp, NOT /kaggle/working) -----------------
+REPO_DIR = "/kaggle/temp/ltx-2.3"
+if not os.path.exists(REPO_DIR):
+    !git clone --depth 1 https://github.com/YLiu95/ltx-2.3 {REPO_DIR}
+
+# --- 3) Inputs ---------------------------------------------------------------
+AUDIO_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrain_Chinese.wav"
+IMAGE_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/female secretary 512x763.png"
+AUDIO_TEXT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrian_Chinese_text.txt"
+PROMPT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/I2V prompt.txt"
+
+# --- 4) Run ------------------------------------------------------------------
+!python {REPO_DIR}/kaggle_s2v/run_s2v.py \
+  --assets_mode download \
+  --pipeline distilled-a2v \
+  --audio_path "{AUDIO_PATH}" \
+  --image_path "{IMAGE_PATH}" \
+  --prompt_file "{PROMPT_FILE}" \
+  --audio_text_file "{AUDIO_TEXT_FILE}" \
+  --quantization fp8-cast \
+  --cleanup aggressive \
+  --vae_tiling default \
+  --progress --progress_vram --progress_vram_every 1
+```

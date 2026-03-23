@@ -3,10 +3,20 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+# Allow running directly from a repo folder (including a Kaggle dataset mount)
+# without requiring `pip install -e`.
+_THIS_FILE = Path(__file__).resolve()
+_REPO_ROOT = _THIS_FILE.parents[1]
+for _rel in ("", "packages/ltx-core/src", "packages/ltx-pipelines/src"):
+    _p = str((_REPO_ROOT / _rel).resolve())
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import torch
 from tqdm.auto import tqdm
@@ -17,6 +27,7 @@ from hf_assets import (
     configure_kaggle_cache_dirs,
     ensure_distilled_a2v_assets,
     ensure_two_stage_a2v_assets,
+    resolve_distilled_a2v_assets_from_dir,
 )
 from image_prep import ceil_to_multiple, pad_image_to_size
 
@@ -100,6 +111,26 @@ def _default_output_dir() -> Path:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="LTX-2.3 Speech-to-Video (image + audio) Kaggle runner")
+
+    p.add_argument(
+        "--assets_mode",
+        choices=("download", "offline"),
+        default="download",
+        help=(
+            "How to resolve model files. "
+            "'download' fetches from Hugging Face into /kaggle/temp (requires internet). "
+            "'offline' loads from a Kaggle dataset mounted under /kaggle/input (no internet)."
+        ),
+    )
+    p.add_argument(
+        "--assets_root",
+        type=str,
+        default=None,
+        help=(
+            "When --assets_mode=offline: path to the assets dataset root containing 'ltx/' and 'gemma/'. "
+            "Example: /kaggle/input/<your-assets-dataset>"
+        ),
+    )
 
     p.add_argument(
         "--pipeline",
@@ -213,6 +244,16 @@ def main() -> None:  # noqa: C901
     configure_kaggle_cache_dirs("/kaggle/temp")
 
     hf_token = os.environ.get("HF_TOKEN", None)
+    if args.assets_mode == "offline":
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        if not args.assets_root:
+            raise ValueError("--assets_root is required when --assets_mode=offline")
+        if args.pipeline != "distilled-a2v":
+            raise ValueError(
+                "--assets_mode=offline currently supports only --pipeline distilled-a2v "
+                "(offline assets contain the distilled checkpoint + spatial upscaler + Gemma)."
+            )
 
     prompt = args.prompt if args.prompt is not None else _read_text_file(args.prompt_file)
     if args.audio_text_file:
@@ -255,6 +296,8 @@ def main() -> None:  # noqa: C901
     output_config_path = out_root / "run_config.json"
 
     resolved = {
+        "assets_mode": args.assets_mode,
+        "assets_root": args.assets_root,
         "pipeline": args.pipeline,
         "audio_path": args.audio_path,
         "image_path": args.image_path,
@@ -284,9 +327,17 @@ def main() -> None:  # noqa: C901
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for LTX inference. No GPU detected.")
 
-    with _StageTimer("Download model assets to /kaggle/temp (HF cache)"):
+    with _StageTimer(
+        "Resolve model assets"
+        if args.assets_mode == "offline"
+        else "Download model assets to /kaggle/temp (HF cache)"
+    ):
         if args.pipeline == "distilled-a2v":
-            assets: DistilledA2VAssets = ensure_distilled_a2v_assets(hf_token, cache_root="/kaggle/temp")
+            assets: DistilledA2VAssets = (
+                resolve_distilled_a2v_assets_from_dir(args.assets_root)
+                if args.assets_mode == "offline"
+                else ensure_distilled_a2v_assets(hf_token, cache_root="/kaggle/temp")
+            )
         else:
             assets2: TwoStageA2VAssets = ensure_two_stage_a2v_assets(hf_token, cache_root="/kaggle/temp")
 

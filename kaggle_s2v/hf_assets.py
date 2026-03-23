@@ -29,6 +29,60 @@ class TwoStageA2VAssets:
     gemma_root: str
 
 
+class OfflineAssetsError(RuntimeError):
+    pass
+
+
+def resolve_distilled_a2v_assets_from_dir(assets_root: str) -> DistilledA2VAssets:
+    """Resolve model file paths from an *offline* Kaggle dataset mount.
+
+    Expected layout under ``assets_root``:
+
+    - ltx/
+      - ltx-2.3-22b-distilled.safetensors
+      - ltx-2.3-spatial-upscaler-x2-1.0.safetensors
+    - gemma/
+      - tokenizer.model
+      - preprocessor_config.json
+      - model*.safetensors (+ index json if sharded)
+    - repo/ltx-2.3/ (optional; for running without git clone)
+    """
+    root = Path(assets_root)
+    ltx_dir = root / "ltx"
+    gemma_dir = root / "gemma"
+
+    distilled_checkpoint_path = ltx_dir / LTX_DISTILLED_CHECKPOINT
+    spatial_upsampler_path = ltx_dir / LTX_SPATIAL_UPSCALER_X2
+
+    required = [
+        distilled_checkpoint_path,
+        spatial_upsampler_path,
+        gemma_dir / "tokenizer.model",
+        gemma_dir / "preprocessor_config.json",
+    ]
+
+    missing = [str(p) for p in required if not p.exists()]
+    if missing:
+        raise OfflineAssetsError(
+            "Offline assets are missing required files:\n"
+            + "\n".join(f"- {p}" for p in missing)
+            + f"\n\nassets_root was: {assets_root}"
+        )
+
+    # Gemma weights can be sharded; just require at least one shard.
+    if not list(gemma_dir.rglob("model*.safetensors")):
+        raise OfflineAssetsError(
+            "Offline assets are missing Gemma weights (expected at least one 'model*.safetensors' under "
+            f"{gemma_dir})."
+        )
+
+    return DistilledA2VAssets(
+        distilled_checkpoint_path=str(distilled_checkpoint_path),
+        spatial_upsampler_path=str(spatial_upsampler_path),
+        gemma_root=str(gemma_dir),
+    )
+
+
 def configure_kaggle_cache_dirs(cache_root: str = "/kaggle/temp") -> Path:
     """Route all HF/Transformers/Torch caches away from /kaggle/working.
 
@@ -121,4 +175,3 @@ def ensure_two_stage_a2v_assets(hf_token: str | None, cache_root: str = "/kaggle
         spatial_upsampler_path=spatial_upsampler_path,
         gemma_root=gemma_root,
     )
-

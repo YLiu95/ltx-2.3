@@ -13,7 +13,62 @@ Key Kaggle constraints this repo follows:
 
 ## Kaggle Quickstart (Speech-to-Video)
 
-Copy/paste `kaggle_s2v/kaggle_cell_example.md` into a **single Kaggle code cell**, or use this minimal version:
+Copy/paste `kaggle_s2v/kaggle_cell_example.md` into a **single Kaggle code cell**, or use one of the minimal versions below.
+
+### Option A (recommended): RTX PRO 6000 runtime with **no internet**
+
+1) In a separate **internet-enabled** Kaggle notebook, build an offline assets dataset by running the single cell in:
+
+- `kaggle_s2v/build_offline_assets_dataset.md`
+
+2) In the **offline** notebook, attach:
+
+- your offline assets dataset (contains `ltx/`, `gemma/`, `repo/`)
+- the input dataset with your audio/image/prompt files
+
+Then run:
+
+```python
+import os
+
+# Keep caches out of /kaggle/working (only outputs should go there)
+os.environ["HF_HOME"] = "/kaggle/temp/hf"
+os.environ["HUGGINGFACE_HUB_CACHE"] = "/kaggle/temp/hf/hub"
+os.environ["TRANSFORMERS_CACHE"] = "/kaggle/temp/hf/transformers"
+os.environ["XDG_CACHE_HOME"] = "/kaggle/temp/xdg-cache"
+os.environ["TORCH_HOME"] = "/kaggle/temp/torch"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+# Hard-offline (prevents any network calls)
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+# Point to the dataset root shown in Kaggle's "Data" panel.
+ASSETS_ROOT = "/kaggle/input/ltx23-offline-assets"  # <-- change
+REPO_DIR = f"{ASSETS_ROOT}/repo/ltx-2.3"
+
+AUDIO_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrain_Chinese.wav"
+IMAGE_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/female secretary 512x763.png"
+AUDIO_TEXT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrian_Chinese_text.txt"
+PROMPT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/I2V prompt.txt"
+
+!python {REPO_DIR}/kaggle_s2v/run_s2v.py \
+  --assets_mode offline \
+  --assets_root "{ASSETS_ROOT}" \
+  --pipeline distilled-a2v \
+  --audio_path "{AUDIO_PATH}" \
+  --image_path "{IMAGE_PATH}" \
+  --prompt_file "{PROMPT_FILE}" \
+  --audio_text_file "{AUDIO_TEXT_FILE}" \
+  --quantization fp8-cast \
+  --cleanup aggressive \
+  --vae_tiling default \
+  --progress --progress_vram --progress_vram_every 1
+```
+
+> Important: Gemma is gated and may have redistribution restrictions. Uploading model weights to a public Kaggle dataset may violate terms. Prefer a **private** dataset.
+
+### Option B: Internet-enabled notebook (downloads weights to `/kaggle/temp`)
 
 > Note: the Gemma repo used by LTX is gated; make sure your Hugging Face account has accepted the model terms.
 
@@ -37,7 +92,6 @@ os.environ["HF_TOKEN"] = user_secrets.get_secret("HF_TOKEN")
 REPO_DIR = "/kaggle/temp/ltx-2.3"
 if not os.path.exists(REPO_DIR):
     !git clone --depth 1 https://github.com/YLiu95/ltx-2.3 {REPO_DIR}
-!pip -q install -e {REPO_DIR}
 
 # Inputs
 AUDIO_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrain_Chinese.wav"
@@ -46,6 +100,7 @@ AUDIO_TEXT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandr
 PROMPT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/I2V prompt.txt"
 
 !python {REPO_DIR}/kaggle_s2v/run_s2v.py \
+  --assets_mode download \
   --pipeline distilled-a2v \
   --audio_path "{AUDIO_PATH}" \
   --image_path "{IMAGE_PATH}" \
@@ -67,6 +122,13 @@ PROMPT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/I2V prompt.t
 ## Runner settings (explained)
 
 All settings are passed to `kaggle_s2v/run_s2v.py`.
+
+### Assets (download vs offline)
+
+- `--assets_mode`:
+  - `download` (default): download from Hugging Face into `/kaggle/temp` (requires internet + `HF_TOKEN`).
+  - `offline`: load from a Kaggle dataset mounted under `/kaggle/input` (no internet).
+- `--assets_root`: required when `--assets_mode offline`. Points at the dataset root that contains `ltx/` and `gemma/`.
 
 ### Core inputs
 

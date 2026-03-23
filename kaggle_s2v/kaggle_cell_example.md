@@ -39,18 +39,29 @@ ASSETS_ROOT = "/kaggle/input/ltx23-offline-assets"  # <-- change to your dataset
 # Extract the repo zip into /kaggle/temp so we can run it without internet.
 import zipfile
 
-# Prefer running directly from a repo folder if the dataset contains one
-# (older dataset versions used ASSETS_ROOT/repo/ltx-2.3/).
-REPO_DIR = f"{ASSETS_ROOT}/repo/ltx-2.3"
-if not os.path.isdir(REPO_DIR):
-    # Newer dataset versions store the repo as a single zip: ASSETS_ROOT/repo_ltx-2.3.zip
+# Prefer running directly from a repo folder if the dataset contains one.
+# Depending on how you built the dataset, the repo may be stored as:
+# - {ASSETS_ROOT}/repo/ltx-2.3/               (older)
+# - {ASSETS_ROOT}/repo_ltx-2.3/ltx-2.3/       (some builds)
+# - {ASSETS_ROOT}/repo_ltx-2.3/               (folder containing repo root)
+# - {ASSETS_ROOT}/repo_ltx-2.3.zip            (recommended)
+repo_candidates = [
+    f"{ASSETS_ROOT}/repo/ltx-2.3",
+    f"{ASSETS_ROOT}/repo_ltx-2.3/ltx-2.3",
+    f"{ASSETS_ROOT}/repo_ltx-2.3",
+]
+REPO_DIR = next((d for d in repo_candidates if os.path.exists(os.path.join(d, "kaggle_s2v", "run_s2v.py"))), None)
+
+if REPO_DIR is None:
     REPO_DIR = "/kaggle/temp/ltx-2.3"
     REPO_ZIP = f"{ASSETS_ROOT}/repo_ltx-2.3.zip"
     if not os.path.exists(REPO_DIR):
         if not os.path.exists(REPO_ZIP):
             raise FileNotFoundError(
-                "Could not find repo code in the assets dataset. Expected either:\n"
-                f"- {ASSETS_ROOT}/repo/ltx-2.3/\n"
+                "Could not find repo code in the assets dataset. Expected one of:\n"
+                f"- {repo_candidates[0]}\n"
+                f"- {repo_candidates[1]}\n"
+                f"- {repo_candidates[2]}\n"
                 f"- {REPO_ZIP}\n"
             )
         with zipfile.ZipFile(REPO_ZIP, "r") as zf:

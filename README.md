@@ -51,9 +51,13 @@ ASSETS_ROOT = "/kaggle/input/ltx23-offline-assets"  # <-- change
 # Extract it to /kaggle/temp (allowed) and run from there.
 import zipfile
 
-# Older dataset versions stored the repo as a folder at {ASSETS_ROOT}/repo/ltx-2.3/.
-REPO_DIR = f"{ASSETS_ROOT}/repo/ltx-2.3"
-if not os.path.isdir(REPO_DIR):
+repo_candidates = [
+    f"{ASSETS_ROOT}/repo/ltx-2.3",         # older
+    f"{ASSETS_ROOT}/repo_ltx-2.3/ltx-2.3", # some builds
+    f"{ASSETS_ROOT}/repo_ltx-2.3",         # folder containing repo root
+]
+REPO_DIR = next((d for d in repo_candidates if os.path.exists(os.path.join(d, "kaggle_s2v", "run_s2v.py"))), None)
+if REPO_DIR is None:
     REPO_DIR = "/kaggle/temp/ltx-2.3"
     REPO_ZIP = f"{ASSETS_ROOT}/repo_ltx-2.3.zip"
     if not os.path.exists(REPO_DIR):

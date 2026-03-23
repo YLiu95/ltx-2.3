@@ -51,11 +51,14 @@ ASSETS_ROOT = "/kaggle/input/ltx23-offline-assets"  # <-- change
 # Extract it to /kaggle/temp (allowed) and run from there.
 import zipfile
 
-REPO_DIR = "/kaggle/temp/ltx-2.3"
-REPO_ZIP = f"{ASSETS_ROOT}/repo_ltx-2.3.zip"
-if not os.path.exists(REPO_DIR):
-    with zipfile.ZipFile(REPO_ZIP, "r") as zf:
-        zf.extractall("/kaggle/temp")
+# Older dataset versions stored the repo as a folder at {ASSETS_ROOT}/repo/ltx-2.3/.
+REPO_DIR = f"{ASSETS_ROOT}/repo/ltx-2.3"
+if not os.path.isdir(REPO_DIR):
+    REPO_DIR = "/kaggle/temp/ltx-2.3"
+    REPO_ZIP = f"{ASSETS_ROOT}/repo_ltx-2.3.zip"
+    if not os.path.exists(REPO_DIR):
+        with zipfile.ZipFile(REPO_ZIP, "r") as zf:
+            zf.extractall("/kaggle/temp")
 
 AUDIO_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrain_Chinese.wav"
 IMAGE_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/female secretary 512x763.png"

@@ -39,11 +39,22 @@ ASSETS_ROOT = "/kaggle/input/ltx23-offline-assets"  # <-- change to your dataset
 # Extract the repo zip into /kaggle/temp so we can run it without internet.
 import zipfile
 
-REPO_DIR = "/kaggle/temp/ltx-2.3"
-REPO_ZIP = f"{ASSETS_ROOT}/repo_ltx-2.3.zip"
-if not os.path.exists(REPO_DIR):
-    with zipfile.ZipFile(REPO_ZIP, "r") as zf:
-        zf.extractall("/kaggle/temp")
+# Prefer running directly from a repo folder if the dataset contains one
+# (older dataset versions used ASSETS_ROOT/repo/ltx-2.3/).
+REPO_DIR = f"{ASSETS_ROOT}/repo/ltx-2.3"
+if not os.path.isdir(REPO_DIR):
+    # Newer dataset versions store the repo as a single zip: ASSETS_ROOT/repo_ltx-2.3.zip
+    REPO_DIR = "/kaggle/temp/ltx-2.3"
+    REPO_ZIP = f"{ASSETS_ROOT}/repo_ltx-2.3.zip"
+    if not os.path.exists(REPO_DIR):
+        if not os.path.exists(REPO_ZIP):
+            raise FileNotFoundError(
+                "Could not find repo code in the assets dataset. Expected either:\n"
+                f"- {ASSETS_ROOT}/repo/ltx-2.3/\n"
+                f"- {REPO_ZIP}\n"
+            )
+        with zipfile.ZipFile(REPO_ZIP, "r") as zf:
+            zf.extractall("/kaggle/temp")
 
 # --- 2) Inputs ---------------------------------------------------------------
 AUDIO_PATH = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/4s_mandrain_Chinese.wav"

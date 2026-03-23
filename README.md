@@ -43,6 +43,9 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
+# Note: some Kaggle images don't ship with PyAV (`import av`). This repo falls
+# back to `ffmpeg` for audio/video I/O when PyAV is missing.
+
 # Point to the dataset root shown in Kaggle's "Data" panel.
 ASSETS_ROOT = "/kaggle/input/ltx23-offline-assets"  # <-- change
 

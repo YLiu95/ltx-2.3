@@ -68,19 +68,69 @@ class _StageTimer:
 
 
 def _audio_duration_seconds(audio_path: str) -> float:
-    import av
+    """Return audio duration in seconds without requiring PyAV.
 
-    container = av.open(audio_path)
+    Kaggle's offline runtimes sometimes do not include `av` (PyAV). We prefer:
+    1) stdlib `wave` for .wav files
+    2) `ffprobe` if available
+    3) PyAV as a last resort (if installed)
+    """
+    import contextlib
+    import subprocess
+    import wave
+
+    # Fast-path for WAV (our default S2V inputs are .wav).
     try:
-        stream = next(s for s in container.streams if s.type == "audio")
-        if stream.duration is not None and stream.time_base is not None:
-            return float(stream.duration * stream.time_base)
-        total_samples = 0
-        for frame in container.decode(stream):
-            total_samples += frame.samples
-        return float(total_samples) / float(stream.rate)
-    finally:
-        container.close()
+        with contextlib.closing(wave.open(audio_path, "rb")) as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+            if rate <= 0:
+                raise ValueError("Invalid WAV sample rate")
+            return float(frames) / float(rate)
+    except (wave.Error, EOFError, OSError):
+        pass
+
+    # Fallback to ffprobe (usually present on Kaggle images).
+    try:
+        r = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                audio_path,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return float(r.stdout.strip())
+    except Exception:
+        pass
+
+    # Last resort: try PyAV if it's installed.
+    try:
+        import av  # type: ignore
+
+        container = av.open(audio_path)
+        try:
+            stream = next(s for s in container.streams if s.type == "audio")
+            if stream.duration is not None and stream.time_base is not None:
+                return float(stream.duration * stream.time_base)
+            total_samples = 0
+            for frame in container.decode(stream):
+                total_samples += frame.samples
+            return float(total_samples) / float(stream.rate)
+        finally:
+            container.close()
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            "PyAV ('av') is not installed, and duration could not be determined via WAV headers or ffprobe. "
+            "Provide a .wav input, or ensure ffprobe is available."
+        ) from e
 
 
 def _snap_num_frames(num_frames: int, *, time_scale: int = 8) -> int:
@@ -445,7 +495,14 @@ def main() -> None:  # noqa: C901
         from ltx_pipelines.utils.media_io import encode_video
 
         chunks = int(get_video_chunks_number(int(args.num_frames), tiling_config))
-        encode_video(video=video_iter, fps=int(args.fps), audio=audio, output_path=str(output_video_path), video_chunks_number=chunks)
+        encode_video(
+            video=video_iter,
+            fps=int(args.fps),
+            audio=audio,
+            output_path=str(output_video_path),
+            video_chunks_number=chunks,
+            expected_num_frames=int(args.num_frames),
+        )
 
     tqdm.write(f"[S2V] Done: {output_video_path}")
 

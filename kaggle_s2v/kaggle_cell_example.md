@@ -26,6 +26,9 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
+# Note: some Kaggle images don't include PyAV (`import av`). The runner falls
+# back to `ffmpeg` for audio/video I/O when PyAV is missing.
+
 # --- 1) Point to the *dataset root* ------------------------------------------
 # This dataset is built by `kaggle_s2v/build_offline_assets_dataset.md`.
 #

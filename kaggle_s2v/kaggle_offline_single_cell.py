@@ -24,7 +24,7 @@ import shutil
 import subprocess
 import sys
 import types
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -279,6 +279,98 @@ try:
     _ensure_gemma3_rope_local_base_freq()
 except Exception as e:
     print("[S2V] (warning) Could not patch Gemma3TextConfig.rope_local_base_freq:", repr(e))
+
+# -----------------------------------------------------------------------------
+# 5.6) Patch GEMMA_MODEL_OPS for transformers==5 rope_parameters layout
+# -----------------------------------------------------------------------------
+# Some repo snapshots assume `config.rope_scaling` is a flat dict containing
+# `rope_type`. In transformers==5, `rope_scaling` is an alias to `rope_parameters`
+# and may be nested by layer type (e.g. `full_attention` / `sliding_attention`).
+#
+# We patch the module op mutator so model build works without editing /kaggle/input.
+try:
+    import torch
+    from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
+
+    from ltx_core.loader.module_ops import ModuleOps
+    import ltx_core.text_encoders.gemma.encoders.encoder_configurator as enc_cfg
+
+    def _gemma_create_and_populate_patched(module):  # noqa: ANN001
+        model = module.model
+        v_model = model.model.vision_tower.vision_model
+        l_model = model.model.language_model
+
+        config = model.config.text_config
+        head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+        partial_rotary_factor = getattr(config, "partial_rotary_factor", 1.0) or 1.0
+        dim = int(head_dim * float(partial_rotary_factor))
+
+        rope_params = getattr(config, "rope_parameters", None) or getattr(config, "rope_scaling", None)
+
+        # Local RoPE (sliding attention) theta
+        local_theta = getattr(config, "rope_local_base_freq", None)
+        if local_theta is None and isinstance(rope_params, dict) and isinstance(rope_params.get("sliding_attention"), dict):
+            local_theta = rope_params["sliding_attention"].get("rope_theta")
+        if local_theta is None and isinstance(rope_params, dict):
+            local_theta = rope_params.get("rope_local_base_freq") or rope_params.get("local_base_freq")
+        if local_theta is None:
+            local_theta = getattr(config, "rope_theta", None) or getattr(config, "rope_base", None) or 10000
+        local_theta = float(local_theta)
+
+        local_rope_freqs = 1.0 / (
+            local_theta ** (torch.arange(0, dim, 2, dtype=torch.int64).to(dtype=torch.float) / dim)
+        )
+
+        # Global RoPE (full attention) parameters
+        rope_theta = getattr(config, "rope_theta", None) or getattr(config, "rope_base", None) or 10000
+        rope_type = None
+        layer_type = None
+        if isinstance(rope_params, dict) and isinstance(rope_params.get("full_attention"), dict):
+            layer_type = "full_attention"
+            rp = rope_params[layer_type]
+            rope_theta = rp.get("rope_theta") or rope_theta
+            rope_type = rp.get("rope_type") or rp.get("type")
+        elif isinstance(rope_params, dict):
+            rope_theta = rope_params.get("rope_theta") or rope_theta
+            rope_type = rope_params.get("rope_type") or rope_params.get("type")
+
+        rope_type = rope_type or "default"
+        rope_theta = float(rope_theta)
+
+        if rope_type == "default":
+            inv_freqs = 1.0 / (
+                rope_theta ** (torch.arange(0, dim, 2, dtype=torch.int64).to(dtype=torch.float) / dim)
+            )
+        else:
+            rope_init_fn = ROPE_INIT_FUNCTIONS.get(rope_type)
+            if rope_init_fn is None:
+                raise ValueError(
+                    f"Unknown rope_type '{rope_type}'. Known: {sorted(ROPE_INIT_FUNCTIONS.keys())} + ['default']"
+                )
+            inv_freqs, _ = rope_init_fn(config, layer_type=layer_type)
+
+        positions_length = len(v_model.embeddings.position_ids[0])
+        position_ids = torch.arange(positions_length, dtype=torch.long, device="cpu").unsqueeze(0)
+        v_model.embeddings.register_buffer("position_ids", position_ids)
+
+        embed_scale = torch.tensor(model.config.text_config.hidden_size**0.5, device="cpu")
+        l_model.embed_tokens.register_buffer("embed_scale", embed_scale)
+        l_model.rotary_emb_local.register_buffer("inv_freq", local_rope_freqs)
+        l_model.rotary_emb.register_buffer("inv_freq", inv_freqs)
+        return module
+
+    enc_cfg.GEMMA_MODEL_OPS = ModuleOps(
+        name=enc_cfg.GEMMA_MODEL_OPS.name,
+        matcher=enc_cfg.GEMMA_MODEL_OPS.matcher,
+        mutator=_gemma_create_and_populate_patched,
+    )
+
+    import ltx_pipelines.utils.model_ledger as model_ledger
+
+    model_ledger.GEMMA_MODEL_OPS = enc_cfg.GEMMA_MODEL_OPS
+    print("[S2V] Patched GEMMA_MODEL_OPS (rope_parameters/rope_type compatibility).")
+except Exception as e:
+    print("[S2V] (warning) Could not patch GEMMA_MODEL_OPS:", repr(e))
 
 
 def _audio_duration_seconds_no_pyav(audio_path: str) -> float:
@@ -643,7 +735,7 @@ NUM_FRAMES = None  # default: round(audio_duration * FPS), snapped to 8k+1
 WIDTH = None  # default: pad image width to multiple-of-64
 HEIGHT = None  # default: pad image height to multiple-of-64
 
-RUN_NAME = f"s2v_offline_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+RUN_NAME = f"s2v_offline_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
 
 argv = [

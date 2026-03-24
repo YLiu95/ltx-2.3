@@ -158,7 +158,9 @@ def create_and_populate(module: GemmaTextEncoder) -> GemmaTextEncoder:
     l_model = model.model.language_model
 
     config = model.config.text_config
-    dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+    head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+    partial_rotary_factor = getattr(config, "partial_rotary_factor", 1.0) or 1.0
+    dim = int(head_dim * float(partial_rotary_factor))
     # transformers versions differ in how they name the "local RoPE base".
     # Prefer the explicit field if present, otherwise fall back to rope_theta (default 10k).
     base = getattr(config, "rope_local_base_freq", None)
@@ -170,7 +172,32 @@ def create_and_populate(module: GemmaTextEncoder) -> GemmaTextEncoder:
         base = getattr(config, "rope_theta", None) or getattr(config, "rope_base", None) or 10000
     base = float(base)
     local_rope_freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(dtype=torch.float) / dim))
-    inv_freqs, _ = ROPE_INIT_FUNCTIONS[config.rope_scaling["rope_type"]](config)
+
+    # Global RoPE parameters (transformers 5 uses `rope_parameters` and may nest by layer type).
+    rope_params = getattr(config, "rope_parameters", None) or getattr(config, "rope_scaling", None)
+    rope_type = None
+    rope_theta = getattr(config, "rope_theta", None) or getattr(config, "rope_base", None) or 10000
+    layer_type = None
+    if isinstance(rope_params, dict):
+        if isinstance(rope_params.get("full_attention"), dict):
+            layer_type = "full_attention"
+            rp = rope_params[layer_type]
+            rope_type = rp.get("rope_type") or rp.get("type")
+            rope_theta = rp.get("rope_theta") or rope_theta
+        else:
+            rope_type = rope_params.get("rope_type") or rope_params.get("type")
+            rope_theta = rope_params.get("rope_theta") or rope_theta
+
+    rope_type = rope_type or "default"
+    rope_theta = float(rope_theta)
+
+    if rope_type == "default":
+        inv_freqs = 1.0 / (rope_theta ** (torch.arange(0, dim, 2, dtype=torch.int64).to(dtype=torch.float) / dim))
+    else:
+        rope_init_fn = ROPE_INIT_FUNCTIONS.get(rope_type)
+        if rope_init_fn is None:
+            raise ValueError(f"Unknown rope_type '{rope_type}'. Known: {sorted(ROPE_INIT_FUNCTIONS.keys())} + ['default']")
+        inv_freqs, _ = rope_init_fn(config, layer_type=layer_type)
 
     positions_length = len(v_model.embeddings.position_ids[0])
     position_ids = torch.arange(positions_length, dtype=torch.long, device="cpu").unsqueeze(0)

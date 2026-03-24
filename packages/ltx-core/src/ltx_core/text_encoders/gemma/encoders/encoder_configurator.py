@@ -159,7 +159,16 @@ def create_and_populate(module: GemmaTextEncoder) -> GemmaTextEncoder:
 
     config = model.config.text_config
     dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
-    base = config.rope_local_base_freq
+    # transformers versions differ in how they name the "local RoPE base".
+    # Prefer the explicit field if present, otherwise fall back to rope_theta (default 10k).
+    base = getattr(config, "rope_local_base_freq", None)
+    if base is None:
+        rope_scaling = getattr(config, "rope_scaling", None)
+        if isinstance(rope_scaling, dict):
+            base = rope_scaling.get("rope_local_base_freq") or rope_scaling.get("local_base_freq")
+    if base is None:
+        base = getattr(config, "rope_theta", None) or getattr(config, "rope_base", None) or 10000
+    base = float(base)
     local_rope_freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(dtype=torch.float) / dim))
     inv_freqs, _ = ROPE_INIT_FUNCTIONS[config.rope_scaling["rope_type"]](config)
 

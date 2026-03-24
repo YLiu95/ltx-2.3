@@ -240,6 +240,46 @@ assert spec and spec.loader
 run_s2v = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(run_s2v)  # type: ignore[arg-type]
 
+# -----------------------------------------------------------------------------
+# 5.5) Patch Gemma3TextConfig for transformers==5.0.0 (missing rope_local_base_freq)
+# -----------------------------------------------------------------------------
+# The LTX Gemma encoder configurator expects `config.rope_local_base_freq`, but
+# transformers 5.0.0's `Gemma3TextConfig` doesn't define it in this Kaggle image.
+# We provide a safe fallback so the model can build.
+try:
+    import importlib
+
+    def _ensure_gemma3_rope_local_base_freq() -> None:
+        candidates = [
+            "transformers.models.gemma3.configuration_gemma3",
+            "transformers.models.gemma3.configuration_gemma3",  # defensive (same)
+        ]
+        for mod_name in candidates:
+            with contextlib.suppress(Exception):
+                m = importlib.import_module(mod_name)
+                cls = getattr(m, "Gemma3TextConfig", None)
+                if cls is None:
+                    continue
+                if hasattr(cls, "rope_local_base_freq"):
+                    return
+
+                def _rope_local_base_freq(self) -> float:  # noqa: ANN001
+                    rope_scaling = getattr(self, "rope_scaling", None)
+                    if isinstance(rope_scaling, dict):
+                        v = rope_scaling.get("rope_local_base_freq") or rope_scaling.get("local_base_freq")
+                        if v is not None:
+                            return float(v)
+                    v = getattr(self, "rope_theta", None) or getattr(self, "rope_base", None) or 10000
+                    return float(v)
+
+                cls.rope_local_base_freq = property(_rope_local_base_freq)  # type: ignore[attr-defined]
+                print("[S2V] Patched Gemma3TextConfig.rope_local_base_freq (fallback -> rope_theta/10000).")
+                return
+
+    _ensure_gemma3_rope_local_base_freq()
+except Exception as e:
+    print("[S2V] (warning) Could not patch Gemma3TextConfig.rope_local_base_freq:", repr(e))
+
 
 def _audio_duration_seconds_no_pyav(audio_path: str) -> float:
     """Return audio duration without requiring PyAV.

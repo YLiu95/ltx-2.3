@@ -145,7 +145,22 @@ sys.path.insert(0, str(REPO_ROOT / "packages/ltx-pipelines/src"))
 # 4) PyAV is often missing on Kaggle. Provide a tiny stub so torchvision/transformers import.
 # -----------------------------------------------------------------------------
 try:
-    import av as _av  # type: ignore  # noqa: F401
+    import av as _av  # type: ignore
+
+    # If this is a previous minimal stub (from an earlier run) and it doesn't
+    # satisfy torchvision's import-time requirements, replace it.
+    _needs_stub_upgrade = not (
+        hasattr(_av, "logging")
+        and hasattr(_av.logging, "set_level")
+        and hasattr(_av.logging, "ERROR")
+        and hasattr(_av, "video")
+        and hasattr(_av.video, "frame")
+        and hasattr(_av.video.frame, "VideoFrame")
+        and hasattr(_av.video.frame.VideoFrame, "pict_type")
+        and (hasattr(_av, "FFmpegError") or hasattr(_av, "AVError"))
+    )
+    if _needs_stub_upgrade:
+        raise ModuleNotFoundError("PyAV stub incomplete; upgrading stub")
 except ModuleNotFoundError:
     av_stub = types.ModuleType("av")
     av_stub.__version__ = "0.0.0-stub"  # helps some debug prints

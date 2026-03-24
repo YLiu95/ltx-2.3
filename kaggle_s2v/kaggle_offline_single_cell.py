@@ -142,18 +142,30 @@ sys.path.insert(0, str(REPO_ROOT / "packages/ltx-pipelines/src"))
 
 
 # -----------------------------------------------------------------------------
-# 4) PyAV is often missing on Kaggle. Provide a tiny stub so older code imports.
+# 4) PyAV is often missing on Kaggle. Provide a tiny stub so torchvision/transformers import.
 # -----------------------------------------------------------------------------
 try:
     import av as _av  # type: ignore  # noqa: F401
 except ModuleNotFoundError:
     av_stub = types.ModuleType("av")
+    av_stub.__version__ = "0.0.0-stub"  # helps some debug prints
 
     # Minimal submodules/classes referenced in type annotations in some versions.
     container_mod = types.ModuleType("av.container")
     audio_mod = types.ModuleType("av.audio")
     video_mod = types.ModuleType("av.video")
     resampler_mod = types.ModuleType("av.audio.resampler")
+    logging_mod = types.ModuleType("av.logging")
+
+    # torchvision.io.video does this at import time:
+    #   av.logging.set_level(av.logging.ERROR)
+    # so provide a compatible shim (no-op).
+    logging_mod.ERROR = 0  # type: ignore[attr-defined]
+
+    def _set_level(*_a, **_kw):  # noqa: ANN001
+        return None
+
+    logging_mod.set_level = _set_level  # type: ignore[attr-defined]
 
     class _Stub:  # noqa: D401
         """Placeholder for PyAV classes when PyAV is not installed."""
@@ -164,6 +176,7 @@ except ModuleNotFoundError:
     av_stub.container = container_mod  # type: ignore[attr-defined]
     av_stub.audio = audio_mod  # type: ignore[attr-defined]
     av_stub.video = video_mod  # type: ignore[attr-defined]
+    av_stub.logging = logging_mod  # type: ignore[attr-defined]
     audio_mod.resampler = resampler_mod  # type: ignore[attr-defined]
     av_stub.AudioFrame = _Stub  # type: ignore[attr-defined]
     av_stub.VideoFrame = _Stub  # type: ignore[attr-defined]
@@ -174,6 +187,7 @@ except ModuleNotFoundError:
     av_stub.open = _no_pyav  # type: ignore[attr-defined]
 
     sys.modules["av"] = av_stub
+    sys.modules["av.logging"] = logging_mod
     sys.modules["av.container"] = container_mod
     sys.modules["av.audio"] = audio_mod
     sys.modules["av.video"] = video_mod

@@ -113,6 +113,16 @@ PROMPT_FILE = "/kaggle/input/datasets/yliu95/s2v-test-data/S2V data/I2V prompt.t
   --progress --progress_vram --progress_vram_every 1
 ```
 
+If your `ltx23-offline-assets` dataset already includes the repo under
+`repo_ltx-2.3/ltx-2.3/` (like in your directory listing), you can also use the
+ready-to-copy single-cell script:
+
+- `kaggle_s2v/kaggle_offline_single_cell.py`
+
+It runs directly from `/kaggle/input/.../repo_ltx-2.3/ltx-2.3`, creates a
+compat `assets_root` under `/kaggle/temp`, and patches common offline issues
+like missing PyAV (`import av`).
+
 > Important: Gemma is gated and may have redistribution restrictions. Uploading model weights to a public Kaggle dataset may violate terms. Prefer a **private** dataset.
 
 ### Option B: Internet-enabled notebook (downloads weights to `/kaggle/temp`)

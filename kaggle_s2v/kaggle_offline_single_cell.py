@@ -154,6 +154,7 @@ except ModuleNotFoundError:
     container_mod = types.ModuleType("av.container")
     audio_mod = types.ModuleType("av.audio")
     video_mod = types.ModuleType("av.video")
+    video_frame_mod = types.ModuleType("av.video.frame")
     resampler_mod = types.ModuleType("av.audio.resampler")
     logging_mod = types.ModuleType("av.logging")
 
@@ -170,6 +171,10 @@ except ModuleNotFoundError:
     class _Stub:  # noqa: D401
         """Placeholder for PyAV classes when PyAV is not installed."""
 
+    # torch/torchvision expect `av.video.frame.VideoFrame` to exist, and the
+    # attribute `pict_type` to exist on the class (see torchvision/io/video.py).
+    _Stub.pict_type = None  # type: ignore[attr-defined]
+
     container_mod.Container = _Stub  # type: ignore[attr-defined]
     audio_mod.AudioStream = _Stub  # type: ignore[attr-defined]
     resampler_mod.AudioResampler = _Stub  # type: ignore[attr-defined]
@@ -181,6 +186,19 @@ except ModuleNotFoundError:
     av_stub.AudioFrame = _Stub  # type: ignore[attr-defined]
     av_stub.VideoFrame = _Stub  # type: ignore[attr-defined]
 
+    video_frame_mod.VideoFrame = _Stub  # type: ignore[attr-defined]
+    video_mod.frame = video_frame_mod  # type: ignore[attr-defined]
+
+    class _AVError(Exception):
+        pass
+
+    class _FFmpegError(_AVError):
+        pass
+
+    # torchvision expects either FFmpegError (newer PyAV) or AVError (older PyAV)
+    av_stub.AVError = _AVError  # type: ignore[attr-defined]
+    av_stub.FFmpegError = _FFmpegError  # type: ignore[attr-defined]
+
     def _no_pyav(*_a, **_kw):  # noqa: ANN001
         raise ModuleNotFoundError("PyAV ('av') is not installed in this Kaggle image.")
 
@@ -191,6 +209,7 @@ except ModuleNotFoundError:
     sys.modules["av.container"] = container_mod
     sys.modules["av.audio"] = audio_mod
     sys.modules["av.video"] = video_mod
+    sys.modules["av.video.frame"] = video_frame_mod
     sys.modules["av.audio.resampler"] = resampler_mod
 
     print("[S2V] PyAV not found. Using ffmpeg/wave fallbacks for audio/video I/O.")
